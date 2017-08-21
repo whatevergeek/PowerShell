@@ -36,11 +36,10 @@ namespace Microsoft.PowerShell {
         /// </summary>
         /// <param name="obj"></param>
         /// <returns>the parent process, or null if the parent is no longer running</returns>
-        public static PSObject GetParentProcess(PSObject obj)
+        public static object GetParentProcess(PSObject obj)
         {
             var process = PSObject.Base(obj) as Process;
-            var parent = process?.GetParent();
-            return parent != null ? ClrFacade.AddProcessProperties(false, parent) : null;
+            return process?.GetParent();
         }
 
         /// <summary>
@@ -59,11 +58,8 @@ namespace Microsoft.PowerShell {
             Diagnostics.Assert(process != null, "Ensure process is not null before calling");
             PROCESS_BASIC_INFORMATION pbi;
             int size;
-#if CORECLR
-            var res = NtQueryInformationProcess(process.SafeHandle.DangerousGetHandle(), 0, out pbi, Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(), out size);
-#else
             var res = NtQueryInformationProcess(process.Handle, 0, out pbi, Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(), out size);
-#endif
+
             return res != 0 ? InvalidProcessId : pbi.InheritedFromUniqueProcessId.ToInt32();
         }
 

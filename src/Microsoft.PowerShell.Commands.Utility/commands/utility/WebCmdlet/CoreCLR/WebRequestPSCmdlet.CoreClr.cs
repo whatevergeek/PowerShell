@@ -16,12 +16,15 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Xml;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
+using System.Linq;
 
 namespace Microsoft.PowerShell.Commands
 {
     /// <summary>
     /// Exception class for webcmdlets to enable returning HTTP error response
-    /// </summary>    
+    /// </summary>
     public sealed class HttpResponseException : HttpRequestException
     {
         /// <summary>
@@ -45,6 +48,31 @@ namespace Microsoft.PowerShell.Commands
     /// </summary>
     public abstract partial class WebRequestPSCmdlet : PSCmdlet
     {
+
+        /// <summary>
+        /// gets or sets the PreserveAuthorizationOnRedirect property
+        /// </summary>
+        /// <remarks>
+        /// This property overrides compatibility with web requests on Windows.
+        /// On FullCLR (WebRequest), authorization headers are stripped during redirect.
+        /// CoreCLR (HTTPClient) does not have this behavior so web requests that work on
+        /// PowerShell/FullCLR can fail with PowerShell/CoreCLR.  To provide compatibility,
+        /// we'll detect requests with an Authorization header and automatically strip
+        /// the header when the first redirect occurs. This switch turns off this logic for
+        /// edge cases where the authorization header needs to be preserved across redirects.
+        /// </remarks>
+        [Parameter]
+        public virtual SwitchParameter PreserveAuthorizationOnRedirect { get; set; }
+
+        /// <summary>
+        /// gets or sets the SkipHeaderValidation property
+        /// </summary>
+        /// <remarks>
+        /// This property adds headers to the request's header collection without validation.
+        /// </remarks>
+        [Parameter]
+        public virtual SwitchParameter SkipHeaderValidation { get; set; }
+
         #region Abstract Methods
 
         /// <summary>
@@ -60,6 +88,26 @@ namespace Microsoft.PowerShell.Commands
         /// Cancellation token source
         /// </summary>
         private CancellationTokenSource _cancelToken = null;
+
+        /// <summary>
+        /// Parse Rel Links
+        /// </summary>
+        internal bool _parseRelLink = false;
+
+        /// <summary>
+        /// Automatically follow Rel Links
+        /// </summary>
+        internal bool _followRelLink = false;
+
+        /// <summary>
+        /// Automatically follow Rel Links
+        /// </summary>
+        internal Dictionary<string, string> _relationLink = null;
+
+        /// <summary>
+        /// Maximum number of Rel Links to follow
+        /// </summary>
+        internal int _maximumFollowRelLink = Int32.MaxValue;
 
         private HttpMethod GetHttpMethod(WebRequestMethod method)
         {
@@ -88,7 +136,9 @@ namespace Microsoft.PowerShell.Commands
 
         #region Virtual Methods
 
-        internal virtual HttpClient GetHttpClient()
+        // NOTE: Only pass true for handleRedirect if the original request has an authorization header
+        // and PreserveAuthorizationOnRedirect is NOT set.
+        internal virtual HttpClient GetHttpClient(bool handleRedirect)
         {
             // By default the HttpClientHandler will automatically decompress GZip and Deflate content
             HttpClientHandler handler = new HttpClientHandler();
@@ -114,20 +164,23 @@ namespace Microsoft.PowerShell.Commands
                 handler.Proxy = WebSession.Proxy;
             }
 
-            /*
-            TODO: HttpClientHandler will support client certificate in RTM
-            See https://github.com/dotnet/corefx/issues/7623 for more details.
             if (null != WebSession.Certificates)
             {
-                handler.ClientCertificates = WebSession.Certificates;
-            }*/
+                handler.ClientCertificates.AddRange(WebSession.Certificates);
+            }
 
             if (SkipCertificateCheck)
             {
-                handler.ServerCertificateCustomValidationCallback = delegate { return true; };
+                handler.ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
+                handler.ClientCertificateOptions = ClientCertificateOption.Manual;
             }
 
-            if (WebSession.MaximumRedirection > -1)
+            // This indicates GetResponse will handle redirects.
+            if (handleRedirect)
+            {
+                handler.AllowAutoRedirect = false;
+            }
+            else if (WebSession.MaximumRedirection > -1)
             {
                 if (WebSession.MaximumRedirection == 0)
                 {
@@ -155,7 +208,7 @@ namespace Microsoft.PowerShell.Commands
             return httpClient;
         }
 
-        internal virtual HttpRequestMessage GetRequest(Uri uri)
+        internal virtual HttpRequestMessage GetRequest(Uri uri, bool stripAuthorization)
         {
             Uri requestUri = PrepareUri(uri);
             HttpMethod httpMethod = null;
@@ -194,7 +247,22 @@ namespace Microsoft.PowerShell.Commands
                     }
                     else
                     {
-                        request.Headers.Add(entry.Key, entry.Value);
+                        if (stripAuthorization
+                            &&
+                            String.Equals(entry.Key, HttpKnownHeaderNames.Authorization.ToString(), StringComparison.OrdinalIgnoreCase)
+                        )
+                        {
+                            continue;
+                        }
+
+                        if (SkipHeaderValidation)
+                        {
+                            request.Headers.TryAddWithoutValidation(entry.Key, entry.Value);
+                        }
+                        else
+                        {
+                            request.Headers.Add(entry.Key, entry.Value);
+                        }
                     }
                 }
             }
@@ -213,7 +281,15 @@ namespace Microsoft.PowerShell.Commands
             }
             else
             {
-                request.Headers.Add(HttpKnownHeaderNames.UserAgent, WebSession.UserAgent);
+                if (SkipHeaderValidation)
+                {
+                    request.Headers.TryAddWithoutValidation(HttpKnownHeaderNames.UserAgent, WebSession.UserAgent);
+                }
+                else
+                {
+                    request.Headers.Add(HttpKnownHeaderNames.UserAgent, WebSession.UserAgent);    
+                }
+                
             }
 
             // Set 'Keep-Alive' to false. This means set the Connection to 'Close'.
@@ -234,7 +310,7 @@ namespace Microsoft.PowerShell.Commands
             }
 
             // Some web sites (e.g. Twitter) will return exception on POST when Expect100 is sent
-            // Default behaviour is continue to send body content anyway after a short period
+            // Default behavior is continue to send body content anyway after a short period
             // Here it send the two part as a whole.
             request.Headers.ExpectContinue = false;
 
@@ -344,13 +420,77 @@ namespace Microsoft.PowerShell.Commands
             }
         }
 
-        internal virtual HttpResponseMessage GetResponse(HttpClient client, HttpRequestMessage request)
+        // Returns true if the status code is one of the supported redirection codes.
+        static bool IsRedirectCode(HttpStatusCode code)
+        {
+            int intCode = (int) code;
+            return
+            (
+                (intCode >= 300 && intCode < 304)
+                ||
+                intCode == 307
+            );
+        }
+
+        // Returns true if the status code is a redirection code and the action requires switching from POST to GET on redirection.
+        // NOTE: Some of these status codes map to the same underlying value but spelling them out for completeness.
+        static bool IsRedirectToGet(HttpStatusCode code)
+        {
+            return
+            (
+                code == HttpStatusCode.Found
+                ||
+                code == HttpStatusCode.Moved
+                ||
+                code == HttpStatusCode.Redirect
+                ||
+                code == HttpStatusCode.RedirectMethod
+                ||
+                code == HttpStatusCode.TemporaryRedirect
+                ||
+                code == HttpStatusCode.RedirectKeepVerb
+                ||
+                code == HttpStatusCode.SeeOther
+            );
+        }
+
+        internal virtual HttpResponseMessage GetResponse(HttpClient client, HttpRequestMessage request, bool stripAuthorization)
         {
             if (client == null) { throw new ArgumentNullException("client"); }
             if (request == null) { throw new ArgumentNullException("request"); }
 
             _cancelToken = new CancellationTokenSource();
-            return client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, _cancelToken.Token).GetAwaiter().GetResult();
+            HttpResponseMessage response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, _cancelToken.Token).GetAwaiter().GetResult();
+
+            if (stripAuthorization && IsRedirectCode(response.StatusCode))
+            {
+                _cancelToken.Cancel();
+                _cancelToken = null;
+
+                // if explicit count was provided, reduce it for this redirection.
+                if (WebSession.MaximumRedirection > 0)
+                {
+                    WebSession.MaximumRedirection--;
+                }
+                // For selected redirects that used POST, GET must be used with the
+                // redirected Location.
+                // Since GET is the default; POST only occurs when -Method POST is used.
+                if (Method == WebRequestMethod.Post && IsRedirectToGet(response.StatusCode))
+                {
+                    // See https://msdn.microsoft.com/en-us/library/system.net.httpstatuscode(v=vs.110).aspx
+                    Method = WebRequestMethod.Get;
+                }
+
+                // recreate the HttpClient with redirection enabled since the first call suppressed redirection
+                using (client = GetHttpClient(false))
+                using (HttpRequestMessage redirectRequest = GetRequest(response.Headers.Location, stripAuthorization:true))
+                {
+                    FillRequestStream(redirectRequest);
+                    _cancelToken = new CancellationTokenSource();
+                    response = client.SendAsync(redirectRequest, HttpCompletionOption.ResponseHeadersRead, _cancelToken.Token).GetAwaiter().GetResult();
+                }
+            }
+            return response;
         }
 
         internal virtual void UpdateSession(HttpResponseMessage response)
@@ -373,92 +513,132 @@ namespace Microsoft.PowerShell.Commands
                 ValidateParameters();
                 PrepareSession();
 
-                using (HttpClient client = GetHttpClient())
-                using (HttpRequestMessage request = GetRequest(Uri))
+                // if the request contains an authorization header and PreserveAuthorizationOnRedirect is not set,
+                // it needs to be stripped on the first redirect.
+                bool stripAuthorization = null != WebSession
+                                          &&
+                                          null != WebSession.Headers
+                                          &&
+                                          !PreserveAuthorizationOnRedirect.IsPresent
+                                          &&
+                                          WebSession.Headers.ContainsKey(HttpKnownHeaderNames.Authorization.ToString());
+
+                using (HttpClient client = GetHttpClient(stripAuthorization))
                 {
-                    FillRequestStream(request);
-                    try
+                    int followedRelLink = 0;
+                    Uri uri = Uri;
+                    do
                     {
-                        long requestContentLength = 0;
-                        if (request.Content != null)
-                            requestContentLength = request.Content.Headers.ContentLength.Value;
-
-                        string reqVerboseMsg = String.Format(CultureInfo.CurrentCulture,
-                            "{0} {1} with {2}-byte payload",
-                            request.Method,
-                            request.RequestUri,
-                            requestContentLength);
-                        WriteVerbose(reqVerboseMsg);
-
-                        HttpResponseMessage response = GetResponse(client, request);
-
-                        string contentType = ContentHelper.GetContentType(response);
-                        string respVerboseMsg = string.Format(CultureInfo.CurrentCulture,
-                            "received {0}-byte response of content type {1}",
-                            response.Content.Headers.ContentLength,
-                            contentType);
-                        WriteVerbose(respVerboseMsg);
-
-                        if (!response.IsSuccessStatusCode)
+                        if (followedRelLink > 0)
                         {
-                            string message = String.Format(CultureInfo.CurrentCulture, WebCmdletStrings.ResponseStatusCodeFailure,
-                                (int)response.StatusCode, response.ReasonPhrase);
-                            HttpResponseException httpEx = new HttpResponseException(message, response);
-                            ErrorRecord er = new ErrorRecord(httpEx, "WebCmdletWebResponseException", ErrorCategory.InvalidOperation, request);
-                            string detailMsg = "";
-                            StreamReader reader = null;
+                            string linkVerboseMsg = string.Format(CultureInfo.CurrentCulture,
+                                WebCmdletStrings.FollowingRelLinkVerboseMsg,
+                                uri.AbsoluteUri);
+                            WriteVerbose(linkVerboseMsg);
+                        }
+
+                        using (HttpRequestMessage request = GetRequest(uri, stripAuthorization:false))
+                        {
+                            FillRequestStream(request);
                             try
                             {
-                                reader = new StreamReader(StreamHelper.GetResponseStream(response));
-                                // remove HTML tags making it easier to read
-                                detailMsg = System.Text.RegularExpressions.Regex.Replace(reader.ReadToEnd(), "<[^>]*>","");
-                            }
-                            catch (Exception)
-                            {
-                                // catch all
-                            }
-                            finally
-                            {
-                                if (reader != null)
+                                long requestContentLength = 0;
+                                if (request.Content != null)
+                                    requestContentLength = request.Content.Headers.ContentLength.Value;
+
+                                string reqVerboseMsg = String.Format(CultureInfo.CurrentCulture,
+                                    WebCmdletStrings.WebMethodInvocationVerboseMsg,
+                                    request.Method,
+                                    request.RequestUri,
+                                    requestContentLength);
+                                WriteVerbose(reqVerboseMsg);
+
+                                HttpResponseMessage response = GetResponse(client, request, stripAuthorization);
+
+                                string contentType = ContentHelper.GetContentType(response);
+                                string respVerboseMsg = string.Format(CultureInfo.CurrentCulture,
+                                    WebCmdletStrings.WebResponseVerboseMsg,
+                                    response.Content.Headers.ContentLength,
+                                    contentType);
+                                WriteVerbose(respVerboseMsg);
+
+                                if (!response.IsSuccessStatusCode)
                                 {
-                                    reader.Dispose();
+                                    string message = String.Format(CultureInfo.CurrentCulture, WebCmdletStrings.ResponseStatusCodeFailure,
+                                        (int)response.StatusCode, response.ReasonPhrase);
+                                    HttpResponseException httpEx = new HttpResponseException(message, response);
+                                    ErrorRecord er = new ErrorRecord(httpEx, "WebCmdletWebResponseException", ErrorCategory.InvalidOperation, request);
+                                    string detailMsg = "";
+                                    StreamReader reader = null;
+                                    try
+                                    {
+                                        reader = new StreamReader(StreamHelper.GetResponseStream(response));
+                                        // remove HTML tags making it easier to read
+                                        detailMsg = System.Text.RegularExpressions.Regex.Replace(reader.ReadToEnd(), "<[^>]*>","");
+                                    }
+                                    catch (Exception)
+                                    {
+                                        // catch all
+                                    }
+                                    finally
+                                    {
+                                        if (reader != null)
+                                        {
+                                            reader.Dispose();
+                                        }
+                                    }
+                                    if (!String.IsNullOrEmpty(detailMsg))
+                                    {
+                                        er.ErrorDetails = new ErrorDetails(detailMsg);
+                                    }
+                                    ThrowTerminatingError(er);
+                                }
+
+                                if (_parseRelLink || _followRelLink)
+                                {
+                                    ParseLinkHeader(response, uri);
+                                }
+                                ProcessResponse(response);
+                                UpdateSession(response);
+
+                                // If we hit our maximum redirection count, generate an error.
+                                // Errors with redirection counts of greater than 0 are handled automatically by .NET, but are
+                                // impossible to detect programmatically when we hit this limit. By handling this ourselves
+                                // (and still writing out the result), users can debug actual HTTP redirect problems.
+                                if (WebSession.MaximumRedirection == 0) // Indicate "HttpClientHandler.AllowAutoRedirect == false"
+                                {
+                                    if (response.StatusCode == HttpStatusCode.Found ||
+                                        response.StatusCode == HttpStatusCode.Moved ||
+                                        response.StatusCode == HttpStatusCode.MovedPermanently)
+                                    {
+                                        ErrorRecord er = new ErrorRecord(new InvalidOperationException(), "MaximumRedirectExceeded", ErrorCategory.InvalidOperation, request);
+                                        er.ErrorDetails = new ErrorDetails(WebCmdletStrings.MaximumRedirectionCountExceeded);
+                                        WriteError(er);
+                                    }
                                 }
                             }
-                            if (!String.IsNullOrEmpty(detailMsg))
+                            catch (HttpRequestException ex)
                             {
-                                er.ErrorDetails = new ErrorDetails(detailMsg);
+                                ErrorRecord er = new ErrorRecord(ex, "WebCmdletWebResponseException", ErrorCategory.InvalidOperation, request);
+                                if (ex.InnerException != null)
+                                {
+                                    er.ErrorDetails = new ErrorDetails(ex.InnerException.Message);
+                                }
+                                ThrowTerminatingError(er);
                             }
-                            ThrowTerminatingError(er);
-                        }
 
-                        ProcessResponse(response);
-                        UpdateSession(response);
-
-                        // If we hit our maximum redirection count, generate an error.
-                        // Errors with redirection counts of greater than 0 are handled automatically by .NET, but are
-                        // impossible to detect programmatically when we hit this limit. By handling this ourselves
-                        // (and still writing out the result), users can debug actual HTTP redirect problems.
-                        if (WebSession.MaximumRedirection == 0) // Indicate "HttpClientHandler.AllowAutoRedirect == false"
-                        {
-                            if (response.StatusCode == HttpStatusCode.Found ||
-                                response.StatusCode == HttpStatusCode.Moved ||
-                                response.StatusCode == HttpStatusCode.MovedPermanently)
+                            if (_followRelLink)
                             {
-                                ErrorRecord er = new ErrorRecord(new InvalidOperationException(), "MaximumRedirectExceeded", ErrorCategory.InvalidOperation, request);
-                                er.ErrorDetails = new ErrorDetails(WebCmdletStrings.MaximumRedirectionCountExceeded);
-                                WriteError(er);
+                                if (!_relationLink.ContainsKey("next"))
+                                {
+                                    return;
+                                }
+                                uri = new Uri(_relationLink["next"]);
+                                followedRelLink++;
                             }
                         }
                     }
-                    catch (HttpRequestException ex)
-                    {
-                        ErrorRecord er = new ErrorRecord(ex, "WebCmdletWebResponseException", ErrorCategory.InvalidOperation, request);
-                        if (ex.InnerException != null)
-                        {
-                            er.ErrorDetails = new ErrorDetails(ex.InnerException.Message);
-                        }
-                        ThrowTerminatingError(er);
-                    }
+                    while (_followRelLink && (followedRelLink < _maximumFollowRelLink));
                 }
             }
             catch (CryptographicException ex)
@@ -617,6 +797,40 @@ namespace Microsoft.PowerShell.Commands
             string body = FormatDictionary(content);
             return (SetRequestContent(request, body));
 
+        }
+
+        internal void ParseLinkHeader(HttpResponseMessage response, System.Uri requestUri)
+        {
+            if (_relationLink == null)
+            {
+                _relationLink = new Dictionary<string, string>();
+            }
+            else
+            {
+                _relationLink.Clear();
+            }
+
+            // we only support the URL in angle brackets and `rel`, other attributes are ignored
+            // user can still parse it themselves via the Headers property
+            string pattern = "<(?<url>.*?)>;\\srel=\"(?<rel>.*?)\"";
+            IEnumerable<string> links;
+            if (response.Headers.TryGetValues("Link", out links))
+            {
+                foreach(string link in links.FirstOrDefault().Split(","))
+                {
+                    Match match = Regex.Match(link, pattern);
+                    if (match.Success)
+                    {
+                        string url = match.Groups["url"].Value;
+                        string rel = match.Groups["rel"].Value;
+                        if (url != String.Empty && rel != String.Empty && !_relationLink.ContainsKey(rel))
+                        {
+                            Uri absoluteUri = new Uri(requestUri, url);
+                            _relationLink.Add(rel, absoluteUri.AbsoluteUri.ToString());
+                        }
+                    }
+                }
+            }
         }
 
         #endregion Helper Methods

@@ -1,10 +1,11 @@
-version: 6.0.0-alpha.17-{build}
+# version is set in tools\appveyor.psm1 - Invoke-AppVeyorInstall
 
-image: Visual Studio 2015
+image: Visual Studio 2017
 
+# cache version - netcoreapp.2.0.0
 cache:
-  - '%LocalAppData%\Microsoft\dotnet'
-  - '%HOMEDRIVE%%HOMEPATH%\.nuget\packages'
+  - '%LocalAppData%\Microsoft\dotnet -> appveyor.yml'
+  - '%HOMEDRIVE%%HOMEPATH%\.nuget\packages -> appveyor.yml'
 
 nuget:
   project_feed: true

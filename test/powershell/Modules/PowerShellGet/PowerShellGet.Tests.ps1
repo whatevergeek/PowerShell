@@ -6,6 +6,8 @@ $SourceLocation = 'https://dtlgalleryint.cloudapp.net'
 $RegisteredINTRepo = $false
 $ContosoServer = 'ContosoServer'
 $FabrikamServerScript = 'Fabrikam-ServerScript'
+$Initialized = $false
+
 
 #region Utility functions
 
@@ -65,35 +67,40 @@ $script:MyDocumentsScriptsPath = Microsoft.PowerShell.Management\Join-Path -Path
 
 #region Register a test repository
 
-# Check if the PackageManagement works in the base-oS or PowerShellCore
-$PSHome
-$PSVersionTable
-$env:PSModulePath
-
-Get-Module -ListAvailable -Name PackageManagement, PowerShellGet
-Import-Module PackageManagement -verbose
-Get-PackageProvider -ListAvailable
-
-$repo = Get-PSRepository -ErrorAction SilentlyContinue |
-            Where-Object {$_.SourceLocation.StartsWith($SourceLocation, [System.StringComparison]::OrdinalIgnoreCase)}
-if($repo)
+function Initialize
 {
-    $RepositoryName = $repo.Name
-}
-else
-{
-    Register-PSRepository -Name $RepositoryName -SourceLocation $SourceLocation -InstallationPolicy Trusted
-    $RegisteredINTRepo = $true
+    # Cleaned up commands whose output to console by deleting or piping to Out-Null
+    Import-Module PackageManagement
+    Get-PackageProvider -ListAvailable | Out-Null
+
+    $repo = Get-PSRepository -ErrorAction SilentlyContinue |
+                Where-Object {$_.SourceLocation.StartsWith($SourceLocation, [System.StringComparison]::OrdinalIgnoreCase)}
+    if($repo)
+    {
+        $script:RepositoryName = $repo.Name
+    }
+    else
+    {
+        Register-PSRepository -Name $RepositoryName -SourceLocation $SourceLocation -InstallationPolicy Trusted
+        $script:RegisteredINTRepo = $true
+    }
 }
 
 #endregion
 
 function Remove-InstalledModules
 {
-    Get-InstalledModule -Name $ContosoServer -AllVersions -ErrorAction SilentlyContinue | Uninstall-Module -Force
+    Get-InstalledModule -Name $ContosoServer -AllVersions -ErrorAction SilentlyContinue | PowerShellGet\Uninstall-Module -Force
 }
 
 Describe "PowerShellGet - Module tests" -tags "Feature" {
+
+    BeforeAll {
+        if ($script:Initialized -eq $false) {
+            Initialize
+            $script:Initialized = $true
+        }
+    }
 
     BeforeEach {
         Remove-InstalledModules
@@ -125,6 +132,13 @@ Describe "PowerShellGet - Module tests" -tags "Feature" {
 
 Describe "PowerShellGet - Module tests (Admin)" -tags @('Feature', 'RequireAdminOnWindows') {
 
+    BeforeAll {
+        if ($script:Initialized -eq $false) {
+            Initialize
+            $script:Initialized = $true
+        }
+    }
+
     BeforeEach {
         Remove-InstalledModules
     }
@@ -154,6 +168,13 @@ function Remove-InstalledScripts
 
 Describe "PowerShellGet - Script tests" -tags "Feature" {
 
+    BeforeAll {
+        if ($script:Initialized -eq $false) {
+            Initialize
+            $script:Initialized = $true
+        }
+    }
+
     BeforeEach {
         Remove-InstalledScripts
     }
@@ -180,6 +201,13 @@ Describe "PowerShellGet - Script tests" -tags "Feature" {
 
 Describe "PowerShellGet - Script tests (Admin)" -tags @('Feature', 'RequireAdminOnWindows') {
 
+    BeforeAll {
+        if ($script:Initialized -eq $false) {
+            Initialize
+            $script:Initialized = $true
+        }
+    }
+
     BeforeEach {
         Remove-InstalledScripts
     }
@@ -195,6 +223,38 @@ Describe "PowerShellGet - Script tests (Admin)" -tags @('Feature', 'RequireAdmin
 
     AfterAll {
         Remove-InstalledScripts
+    }
+}
+
+Describe 'PowerShellGet Type tests' -tags @('CI') {
+    BeforeAll {
+        Import-Module PowerShellGet -Force
+    }
+
+    It 'Ensure PowerShellGet Types are available' {
+        $PowerShellGetNamespace = 'Microsoft.PowerShell.Commands.PowerShellGet'
+        $PowerShellGetTypeDetails = @{
+            InternalWebProxy = @('GetProxy', 'IsBypassed')
+        }
+
+        if((IsWindows)) {
+            $PowerShellGetTypeDetails['CERT_CHAIN_POLICY_PARA'] = @('cbSize','dwFlags','pvExtraPolicyPara')
+            $PowerShellGetTypeDetails['CERT_CHAIN_POLICY_STATUS'] = @('cbSize','dwError','lChainIndex','lElementIndex','pvExtraPolicyStatus')
+            $PowerShellGetTypeDetails['InternalSafeHandleZeroOrMinusOneIsInvalid'] = @('IsInvalid')
+            $PowerShellGetTypeDetails['InternalSafeX509ChainHandle'] = @('CertFreeCertificateChain','ReleaseHandle','InvalidHandle')
+            $PowerShellGetTypeDetails['Win32Helpers'] = @('CertVerifyCertificateChainPolicy', 'CertDuplicateCertificateChain', 'IsMicrosoftCertificate')
+        }
+
+        if('Microsoft.PowerShell.Telemetry.Internal.TelemetryAPI' -as [Type]) {
+            $PowerShellGetTypeDetails['Telemetry'] = @('TraceMessageArtifactsNotFound', 'TraceMessageNonPSGalleryRegistration')
+        }
+
+        $PowerShellGetTypeDetails.GetEnumerator() | ForEach-Object {
+            $ClassName = $_.Name
+            $Type = "$PowerShellGetNamespace.$ClassName" -as [Type]
+            $Type | Select-Object -ExpandProperty Name | Should Be $ClassName
+            $_.Value | ForEach-Object { $Type.DeclaredMembers.Name -contains $_ | Should Be $true }
+        }
     }
 }
 

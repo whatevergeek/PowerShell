@@ -3256,7 +3256,7 @@ namespace Microsoft.PowerShell.Commands
                     try
                     {
                         System.IO.DirectoryInfo di = new System.IO.DirectoryInfo(providerPath);
-                        if (!Platform.IsWindows && di != null && (di.Attributes & System.IO.FileAttributes.ReparsePoint) != 0)
+                        if (di != null && (di.Attributes & System.IO.FileAttributes.ReparsePoint) != 0)
                         {
                             shouldRecurse = false;
                             treatAsFile = true;
@@ -3510,7 +3510,7 @@ namespace Microsoft.PowerShell.Commands
             Collection<PathInfo> results = new Collection<PathInfo>();
             try
             {
-                results = SessionState.Path.GetResolvedPSPathFromPSPath(path);
+                results = SessionState.Path.GetResolvedPSPathFromPSPath(path, CmdletProviderContext);
             }
             catch (PSNotSupportedException notSupported)
             {

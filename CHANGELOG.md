@@ -1,5 +1,310 @@
 # Changelog
 
+## v6.0.0-beta.5 - 2017-08-02
+
+### Breaking changes
+
+* Remove the `*-Counter` cmdlets in `Microsoft.PowerShell.Diagnostics` due to the use of unsupported APIs until a better solution is found. (#4303)
+* Remove the `Microsoft.PowerShell.LocalAccounts` due to the use of unsupported APIs until a better solution is found. (#4302)
+
+### Engine updates and fixes
+
+* Fix the issue where PowerShell Core wasn't working on Windows 7 or Windows Server 2008 R2/2012 (non-R2). (#4463)
+* `ValidateSetAttribute` enhancement: support set values to be dynamically generated from a custom `ValidateSetValueGenerator`. (#3784) (Thanks to @iSazonov!)
+* Disable breaking into debugger on Ctrl+Break when running non-interactively. (#4283) (Thanks to @mwrock!)
+* Give error instead of crashing if WSMan client library is not available. (#4387)
+* Allow passing `$true`/`$false` as a parameter to scripts using `powershell.exe -File`. (#4178)
+* Enable `DataRow`/`DataRowView` adapters in PowerShell Core to fix an issue with `DataTable` usage. (#4258)
+* Fix an issue where PowerShell class static methods were being shared across `Runspace`s/`SessionState`s. (#4209)
+* Fix array expression to not return null or throw error. (#4296)
+* Fixes a CIM deserialization bug where corrupted CIM classes were instantiating non-CIM types. (#4234)
+* Improve error message when `HelpMessage` property of `ParameterAttribute` is set to empty string. (#4334)
+* Make `ShellExecuteEx` run in a STA thread. (#4362)
+
+### General cmdlet updates and fixes
+
+* Add `-SkipHeaderValidation` switch to `Invoke-WebRequest` and `Invoke-RestMethod` to support adding headers without validating the header value. (#4085)
+* Add support for `Invoke-Item -Path <folder>`. (#4262)
+* Fix `ConvertTo-Html` output when using a single column header. (#4276)
+* Fix output of `Length` for `FileInfo` when using `Format-List`. (#4437)
+* Fix an issue in implicit remoting where restricted sessions couldn't use `Get-FormatData –PowerShellVersion`. (#4222)
+* Fix an issue where `Register-PSSessionConfiguration` fails if `SessionConfig` folder doesn't exist. (#4271)
+
+### Installer updates
+
+* Create script to install latest PowerShell from Microsoft package repositories (or Homebrew) on non-Windows platforms. (#3608) (Thanks to @DarwinJS!)
+* Enable MSI upgrades rather than a side-by-side install. (#4259)
+* Add a checkbox to open PowerShell after the Windows MSI installer has finished. (#4203) (Thanks to @bergmeister!)
+* Add Amazon Linux compatibility to `install-powershell.sh`. (#4360) (Thanks to @DarwinJS!)
+* Add ability to package PowerShell Core as a NuGet package. (#4363)
+
+### Build/test and code cleanup
+
+* Add build check for MFC for Visual C++ during Windows builds.
+  This fixes a long-standing (and very frustrating!) issue with missing build dependencies! (#4185) (Thanks to @KirkMunro!)
+* Move building Windows PSRP binary out of `Start-PSBuild`.
+  Now `Start-PSBuild` doesn't build PSRP binary on windows. Instead, we consume the PSRP binary from a NuGet package. (#4335)
+* Add tests for built-in type accelerators. (#4230) (Thanks to @dchristian3188!)
+* Increase code coverage of `Get-ChildItem` on file system. (#4342) (Thanks to @jeffbi!)
+* Increase test coverage for `Rename-Item` and `Move-Item`. (#4329) (Thanks to @jeffbi!)
+* Add test coverage for Registry provider. (#4354) (Thanks to @jeffbi!)
+* Fix warnings and errors thrown by PSScriptAnalyzer. (#4261) (Thanks to @bergmeister!)
+* Fix regressions that cause implicit remoting tests to fail. (#4326)
+* Disable legacy UTC and SQM Windows telemetry by enclosing the code in '#if LEGACYTELEMETRY'. (#4190)
+
+### Cleanup `#if CORECLR` code
+
+PowerShell 6.0 will be exclusively built on top of CoreCLR,
+so we are removing a large amount of code that's built only for FullCLR.
+To read more about this, check out [this blog post](https://blogs.msdn.microsoft.com/powershell/2017/07/14/powershell-6-0-roadmap-coreclr-backwards-compatibility-and-more/).
+
+## v6.0.0-beta.4 - 2017-07-12
+
+## Windows PowerShell backwards compatibility
+
+In the `beta.4` release, we've introduced a change to add the Windows PowerShell `PSModulePath` to the default `PSModulePath` in PowerShell Core on Windows. (#4132)
+
+Along with the introduction of .NET Standard 2.0 in `6.0.0-beta.1` and a GAC probing fix in `6.0.0-beta.3`,
+**this change will enable a large number of your existing Windows PowerShell modules/scripts to "just work" inside of PowerShell Core on Windows**.
+(Note: We have also fixed the CDXML modules on Windows that were regressed in `6.0.0-beta.2` as part of #4144).
+
+So that we can further enable this backwards compatibility,
+we ask that you tell us more about what modules or scripts do and don't work in Issue #4062.
+This feedback will also help us determine if `PSModulePath` should include the Windows PowerShell values by default in the long run.
+
+For more information on this, we invite you to read [this blog post explaining PowerShell Core and .NET Standard in more detail](https://blogs.msdn.microsoft.com/powershell/?p=13355).
+
+### Engine updates and fixes
+
+- Add Windows PowerShell `PSModulePath` by default on Windows. (#4132)
+- Move PowerShell to `2.0.0-preview3-25426-01` and using the .NET CLI version `2.0.0-preview2-006502`. (#4144)
+- Performance improvement in PSReadline by minimizing writing ANSI escape sequences. (#4110)
+- Implement Unicode escape parsing so that users can use Unicode characters as arguments, strings or variable names. (#3958) (Thanks to @rkeithhill!)
+- Script names or full paths can have commas. (#4136) (Thanks to @TimCurwick!)
+- Added `semver` as a type accelerator for `System.Management.Automation.SemanticVersion`. (#4142) (Thanks to @oising!)
+- Close `eventLogSession` and `EventLogReader` to unlock an ETL log. (#4034) (Thanks to @iSazonov!)
+
+### General cmdlet updates and fixes
+
+- `Move-Item` cmdlet honors `-Include`, `-Exclude`, and `-Filter` parameters. (#3878)
+- Add a parameter to `Get-ChildItem` called `-FollowSymlink` that traverses symlinks on demand, with checks for link loops. (#4020)
+- Change `New-ModuleManifest` encoding to UTF8NoBOM on non-Windows platforms. (#3940)
+- `Get-AuthenticodeSignature` cmdlets can now get file signature timestamp. (#4061)
+- Add tab completion for `Export-Counter` `-FileFormat` parameter. (#3856)
+- Fixed `Import-Module` on non-Windows platforms so that users can import modules with `NestedModules` and `RootModules`. (#4010)
+- Close `FileStream` opened by `Get-FileHash`. (#4175) (Thanks to @rkeithhill!)
+
+### Remoting
+
+- Fixed hang when the SSH client abruptly terminates. (#4123)
+
+### Documentation
+
+- Added recommended settings for VS Code. (#4054) (Thanks to @iSazonov!)
+
+## v6.0.0-beta.3 - 2017-06-20
+
+### Breaking changes
+
+- Remove the `BuildVersion` property from `$PSVersionTable`.
+ This property was strongly tied to the Windows build version.
+ Instead, we recommend that you use `GitCommitId` to retrieve the exact build version of PowerShell Core.
+ (#3877) (Thanks to @iSazonov!)
+- Change positional parameter for `powershell.exe` from `-Command` to `-File`.
+ This fixes the usage of `#!` (aka as a shebang) in PowerShell scripts that are being executed from non-PowerShell shells on non-Windows platforms.
+ This also means that you can now do things like `powershell foo.ps1` or `powershell fooScript` without specifying `-File`.
+ However, this change now requires that you explicitly specify `-c` or `-Command` when trying to do things like `powershell.exe Get-Command`.
+ (#4019)
+- Remove `ClrVersion` property from `$PSVersionTable`.
+ (This property is largely irrelevant for .NET Core,
+ and was only preserved in .NET Core for specific legacy purposes that are inapplicable to PowerShell.)
+ (#4027)
+
+### Engine updates and fixes
+
+- Add support to probe and load assemblies from GAC on Windows platform.
+ This means that you can now load Windows PowerShell modules with assembly dependencies which reside in the GAC.
+ If you're interested in running your traditional Windows PowerShell scripts and cmdlets using the power of .NET Standard 2.0,
+ try adding your Windows PowerShell module directories to your PowerShell Core `$PSModulePath`.
+ (E.g. `$env:PSModulePath += ';C:\Program Files\WindowsPowerShell\Modules;C:\WINDOWS\system32\WindowsPowerShell\v1.0\Modules'`)
+ Even if the module isn't owned by the PowerShell Team, please tell us what works and what doesn't by leaving a comment in [issue #4062][issue-4062]! (#3981)
+- Enhance type inference in tab completion based on runtime variable values. (#2744) (Thanks to @powercode!)
+ This enables tab completion in situations like:
+ ```powershell
+ $p = Get-Process
+ $p | Foreach-Object Prio<tab>
+ ```
+- Add `GitCommitId` to PowerShell Core banner.
+ Now you don't have to run `$PSVersionTable` as soon as you start PowerShell to get the version! (#3916) (Thanks to @iSazonov!)
+- Fix a bug in tab completion to make `native.exe --<tab>` call into native completer. (#3633) (Thanks to @powercode!)
+- Fix PowerShell Core to allow use of long paths that are more than 260 characters. (#3960)
+- Fix ConsoleHost to honour `NoEcho` on Unix platforms. (#3801)
+- Fix transcription to not stop when a Runspace is closed during the transcription. (#3896)
+
+[issue-4062]: https://github.com/PowerShell/PowerShell/issues/4062
+
+### General cmdlet updates and fixes
+
+- Enable `Send-MailMessage` in PowerShell Core. (#3869)
+- Fix `Get-Help` to support case insensitive pattern matching on Unix platforms. (#3852)
+- Fix tab completion on `Get-Help` for `about_*` topics. (#4014)
+- Fix PSReadline to work in Windows Server Core container image. (#3937)
+- Fix `Import-Module` to honour `ScriptsToProcess` when `-Version` is specified. (#3897)
+- Strip authorization header on redirects with web cmdlets. (#3885)
+- `Start-Sleep`: add the alias `ms` to the parameter `-Milliseconds`. (#4039) (Thanks to @Tadas!)
+
+### Developer experience
+
+- Make hosting PowerShell Core in your own .NET applications much easier by refactoring PowerShell Core to use the default CoreCLR loader. (#3903)
+- Update `Add-Type` to support `CSharpVersion7`. (#3933) (Thanks to @iSazonov)
+
+## v6.0.0-beta.2 - 2017-06-01
+
+### Support backgrounding of pipelines with ampersand (`&`) (#3360)
+
+- Putting `&` at the end of a pipeline will cause the pipeline to be run as a PowerShell job.
+- When a pipeline is backgrounded, a job object is returned.
+- Once the pipeline is running as a job, all of the standard `*-Job` cmdlets can be used to manage the job.
+- Variables (ignoring process-specific variables) used in the pipeline are automatically copied to the job so `Copy-Item $foo $bar &` just works.
+- The job is also run in the current directory instead of the user's home directory.
+- For more information about PowerShell jobs, see [about_Jobs](https://msdn.microsoft.com/en-us/powershell/reference/6/about/about_jobs).
+
+### Engine updates and fixes
+
+- Crossgen more of the .NET Core assemblies to improve PowerShell Core startup time. (#3787)
+- Enable comparison between a `SemanticVersion` instance and a `Version` instance that is constructed only with `Major` and `Minor` version values.
+  This will fix some cases where PowerShell Core was failing to import older Windows PowerShell modules. (#3793) (Thanks to @mklement0!)
+
+### General cmdlet updates and fixes
+
+- Support Link header pagination in web cmdlets (#3828)
+    - For `Invoke-WebRequest`, when the response includes a Link header we create a RelationLink property as a Dictionary representing the URLs and `rel` attributes and ensure the URLs are absolute to make it easier for the developer to use.
+    - For `Invoke-RestMethod`, when the response includes a Link header we expose a `-FollowRelLink` switch to automatically follow `next` `rel` links until they no longer exist or once we hit the optional `-MaximumFollowRelLink` parameter value.
+- Update `Get-ChildItem` to be more in line with the way that the *nix `ls -R` and the Windows `DIR /S` native commands handle symbolic links to directories during a recursive search.
+  Now, `Get-ChildItem` returns the symbolic links it encountered during the search, but it won't search the directories those links target. (#3780)
+- Fix `Get-ChildItem` to continue enumeration after throwing an error in the middle of a set of items.
+  This fixes some issues where inaccessible directories or files would halt execution of `Get-ChildItem`. (#3806)
+- Fix `ConvertFrom-Json` to deserialize an array of strings from the pipeline that together construct a complete JSON string.
+  This fixes some cases where newlines would break JSON parsing. (#3823)
+- Enable `Get-TimeZone` for macOS/Linux. (#3735)
+- Change to not expose unsupported aliases and cmdlets on macOS/Linux. (#3595) (Thanks to @iSazonov!)
+- Fix `Invoke-Item` to accept a file path that includes spaces on macOS/Linux. (#3850)
+- Fix an issue where PSReadline was not rendering multi-line prompts correctly on macOS/Linux. (#3867)
+- Fix an issue where PSReadline was not working on Nano Server. (#3815)
+
+## v6.0.0-beta.1 - 2017-05-08
+
+### Move to .NET Core 2.0 (.NET Standard 2.0 support)
+
+PowerShell Core has moved to using .NET Core 2.0 so that we can leverage all the benefits of .NET Standard 2.0. (#3556)
+To learn more about .NET Standard 2.0, there's some great starter content [on Youtube](https://www.youtube.com/playlist?list=PLRAdsfhKI4OWx321A_pr-7HhRNk7wOLLY),
+on [the .NET blog](https://blogs.msdn.microsoft.com/dotnet/2016/09/26/introducing-net-standard/),
+and [on GitHub](https://github.com/dotnet/standard/blob/master/docs/faq.md).
+We'll also have more content soon in our [repository documentation](https://github.com/PowerShell/PowerShell/tree/master/docs) (which will eventually make its way to [official documentation](https://github.com/powershell/powershell-docs)).
+In a nutshell, .NET Standard 2.0 allows us to have universal, portable modules between Windows PowerShell (which uses the full .NET Framework) and PowerShell Core (which uses .NET Core).
+Many modules and cmdlets that didn't work in the past may now work on .NET Core, so import your favorite modules and tell us what does and doesn't work in our GitHub Issues!
+
+### Telemetry
+
+- For the first beta of PowerShell Core 6.0, telemetry has been to the console host to report two values (#3620):
+    - the OS platform (`$PSVersionTable.OSDescription`)
+    - the exact version of PowerShell (`$PSVersionTable.GitCommitId`)
+
+If you want to opt-out of this telemetry, simply delete `$PSHome\DELETE_ME_TO_DISABLE_CONSOLEHOST_TELEMETRY`.
+Even before the first run of Powershell, deleting this file will bypass all telemetry.
+In the future, we plan on also enabling a configuration value for whatever is approved as part of [RFC0015](https://github.com/PowerShell/PowerShell-RFC/blob/master/1-Draft/RFC0015-PowerShell-StartupConfig.md).
+We also plan on exposing this telemetry data (as well as whatever insights we leverage from the telemetry) in [our community dashboard](https://blogs.msdn.microsoft.com/powershell/2017/01/31/powershell-open-source-community-dashboard/).
+
+If you have any questions or comments about our telemetry, please file an issue.
+
+### Engine updates and fixes
+
+- Add support for native command globbing on Unix platforms. (#3643)
+    - This means you can now use wildcards with native binaries/commands (e.g. `ls *.txt`).
+- Fix PowerShell Core to find help content from `$PSHome` instead of the Windows PowerShell base directory. (#3528)
+    - This should fix issues where about_* topics couldn't be found on Unix platforms.
+- Add the `OS` entry to `$PSVersionTable`. (#3654)
+- Arrange the display of `$PSVersionTable` entries in the following way: (#3562) (Thanks to @iSazonov!)
+    - `PSVersion`
+    - `PSEdition`
+    - alphabetical order for rest entries based on the keys
+- Make PowerShell Core more resilient when being used with an account that doesn't have some key environment variables. (#3437)
+- Update PowerShell Core to accept the `-i` switch to indicate an interactive shell. (#3558)
+    - This will help when using PowerShell as a default shell on Unix platforms.
+- Relax the PowerShell `SemanticVersion` constructors to not require 'minor' and 'patch' portions of a semantic version name. (#3696)
+- Improve performance to security checks when group policies are in effect for ExecutionPolicy. (#2588) (Thanks to @powercode)
+- Fix code in PowerShell to use `IntPtr(-1)` for `INVALID_HANDLE_VALUE` instead of `IntPtr.Zero`. (#3544) (Thanks to @0xfeeddeadbeef)
+
+### General cmdlet updates and fixes
+
+- Change the default encoding and OEM encoding used in PowerShell Core to be compatible with Windows PowerShell. (#3467) (Thanks to @iSazonov!)
+- Fix a bug in `Import-Module` to avoid incorrect cyclic dependency detection. (#3594)
+- Fix `New-ModuleManifest` to correctly check if a URI string is well formed. (#3631)
+
+### Filesystem-specific updates and fixes
+
+- Use operating system calls to determine whether two paths refer to the same file in file system operations. (#3441)
+    - This will fix issues where case-sensitive file paths were being treated as case-insensitive on Unix platforms.
+- Fix `New-Item` to allow creating symbolic links to file/directory targets and even a non-existent target. (#3509)
+- Change the behavior of `Remove-Item` on a symbolic link to only removing the link itself. (#3637)
+- Use better error message when `New-Item` fails to create a symbolic link because the specified link path points to an existing item. (#3703)
+- Change `Get-ChildItem` to list the content of a link to a directory on Unix platforms. (#3697)
+- Fix `Rename-Item` to allow Unix globbing patterns in paths. (#3661)
+
+### Interactive fixes
+
+- Add Hashtable tab completion for `-Property` of `Select-Object`. (#3625) (Thanks to @powercode)
+- Fix tab completion with `@{<tab>` to avoid crash in PSReadline. (#3626) (Thanks to @powercode)
+- Use `<id> - <name>` as `ToolTip` and `ListItemText` when tab completing process ID. (#3664) (Thanks to @powercode)
+
+### Remoting fixes
+
+- Update PowerShell SSH remoting to handle multi-line error messages from OpenSSH client. (#3612)
+- Add `-Port` parameter to `New-PSSession` to create PowerShell SSH remote sessions on non-standard (non-22) ports. (#3499) (Thanks to @Lee303)
+
+### API Updates
+
+- Add the public property `ValidRootDrives` to `ValidateDriveAttribute` to make it easy to discover the attribute state via `ParameterMetadata` or `PSVariable` objects. (#3510) (Thanks to @indented-automation!)
+- Improve error messages for `ValidateCountAttribute`. (#3656) (Thanks to @iSazonov)
+- Update `ValidatePatternAttribute`, `ValidateSetAttribute` and `ValidateScriptAttribute` to allow users to more easily specify customized error messages. (#2728) (Thanks to @powercode)
+
+## v6.0.0-alpha.18 - 2017-04-05
+
+### Progress Bar
+
+We made a number of fixes to the progress bar rendering and the `ProgressRecord` object that improved cmdlet performance and fixed some rendering bugs on non-Windows platforms.
+
+- Fix a bug that caused the progress bar to drift on Unix platforms. (#3289)
+- Improve the performance of writing progress records. (#2822) (Thanks to @iSazonov!)
+- Fix the progress bar rendering on Unix platforms. (#3362) (#3453)
+- Reuse `ProgressRecord` in Web Cmdlets to reduce the GC overhead. (#3411) (Thanks to @iSazonov!)
+
+### Cmdlet updates
+
+- Use `ShellExecute` with `Start-Process`, `Invoke-Item`, and `Get-Help -Online` so that those cmdlets use standard shell associations to open a file/URI.
+  This means you `Get-Help -Online` will always use your default browser, and `Start-Process`/`Invoke-Item` can open any file or path with a handler.
+  (Note: there are still some problems with STA threads.) (#3281, partially fixes #2969)
+- Add `-Extension` and `-LeafBase` switches to `Split-Path` so that you can split paths between the filename extension and the rest of the filename. (#2721) (Thanks to @powercode!)
+- Implement `Format-Hex` in C# along with some behavioral changes to multiple parameters and the pipeline. (#3320) (Thanks to @MiaRomero!)
+- Add `-NoProxy` to web cmdlets so that they ignore the system-wide proxy setting. (#3447) (Thanks to @TheFlyingCorpse!)
+- Fix `Out-Default -Transcript` to properly revert out of the `TranscribeOnly` state, so that further output can be displayed on Console. (#3436) (Thanks to @PetSerAl!)
+- Fix `Get-Help` to not return multiple instances of the same help file. (#3410)
+
+### Interactive fixes
+
+- Enable argument auto-completion for `-ExcludeProperty` and `-ExpandProperty` of `Select-Object`. (#3443) (Thanks to @iSazonov!)
+- Fix a tab completion bug that prevented `Import-Module -n<tab>` from working. (#1345)
+
+### Cross-platform fixes
+
+- Ignore the `-ExecutionPolicy` switch when running PowerShell on non-Windows platforms because script signing is not currently supported. (#3481)
+- Standardize the casing of the `PSModulePath` environment variable. (#3255)
+
+### JEA fixes
+
+- Fix the JEA transcription to include the endpoint configuration name in the transcript header. (#2890)
+- Fix `Get-Help` in a JEA session. (#2988)
+
 ## v6.0.0-alpha.17 - 2017-03-08
 
 - Update PSRP client libraries for Linux and Mac.

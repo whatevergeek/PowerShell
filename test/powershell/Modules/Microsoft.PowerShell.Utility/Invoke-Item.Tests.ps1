@@ -1,47 +1,175 @@
 using namespace System.Diagnostics
 
-Describe "Invoke-Item on non-Windows" -Tags "CI" {
-
-    function NewProcessStartInfo([string]$CommandLine, [switch]$RedirectStdIn)
-    {
-        return [ProcessStartInfo]@{
-            FileName               = $powershell
-            Arguments              = $CommandLine
-            RedirectStandardInput  = $RedirectStdIn
-            RedirectStandardOutput = $true
-            RedirectStandardError  = $true
-            UseShellExecute        = $false
-        }
-    }
-
-    function RunPowerShell([ProcessStartInfo]$debugfn)
-    {
-        $process = [Process]::Start($debugfn)
-        return $process
-    }
-
-    function EnsureChildHasExited([Process]$process, [int]$WaitTimeInMS = 15000)
-    {
-        $process.WaitForExit($WaitTimeInMS)
-
-        if (!$process.HasExited)
-        {
-            $process.HasExited | Should Be $true
-            $process.Kill()
-        }
-    }
-
+Describe "Invoke-Item basic tests" -Tags "Feature" {
     BeforeAll {
-        $powershell = Join-Path -Path $PsHome -ChildPath "powershell"
-        Setup -File testfile.txt -Content "Hello World"
-        $testfile = Join-Path $TestDrive testfile.txt
+        $powershell = Join-Path $PSHOME -ChildPath powershell
+
+        $testFile1 = Join-Path -Path $TestDrive -ChildPath "text1.txt"
+        New-Item -Path $testFile1 -ItemType File -Force > $null
+
+        $testFolder = Join-Path -Path $TestDrive -ChildPath "My Folder"
+        New-Item -Path $testFolder -ItemType Directory -Force > $null
+        $testFile2 = Join-Path -Path $testFolder -ChildPath "text2.txt"
+        New-Item -Path $testFile2 -ItemType File -Force > $null
+
+        $textFileTestCases = @(
+            @{ TestFile = $testFile1 },
+            @{ TestFile = $testFile2 })
     }
 
-    It "Should invoke a text file without error on non-Windows" -Skip:($IsWindows) {
-        $debugfn = NewProcessStartInfo "-noprofile ""``Invoke-Item $testfile`n" -RedirectStdIn
-        $process = RunPowerShell $debugfn
-        EnsureChildHasExited $process
-        $process.ExitCode | Should Be 0
+    Context "Invoke a text file on Unix" {
+        BeforeEach {
+            $redirectErr = Join-Path -Path $TestDrive -ChildPath "error.txt"
+        }
+
+        AfterEach {
+            Remove-Item -Path $redirectErr -Force -ErrorAction SilentlyContinue
+        }
+
+        ## Run this test only on OSX because redirecting stderr of 'xdg-open' results in weird behavior in our Linux CI,
+        ## causing this test to fail or the build to hang.
+        It "Should invoke text file '<TestFile>' without error on Mac" -Skip:(!$IsOSX) -TestCases $textFileTestCases {
+            param($TestFile)
+
+            $expectedTitle = Split-Path $TestFile -Leaf
+            open -F -a TextEdit
+            $beforeCount = [int]('tell application "TextEdit" to count of windows' | osascript)
+            Invoke-Item -Path $TestFile
+            $startTime = Get-Date
+            $title = [String]::Empty
+            while (((Get-Date) - $startTime).TotalSeconds -lt 30 -and ($title -ne $expectedTitle))
+            {
+                Start-Sleep -Milliseconds 100
+                $title = 'tell application "TextEdit" to get name of front window' | osascript
+            }
+            $afterCount = [int]('tell application "TextEdit" to count of windows' | osascript)
+            $afterCount | Should Be ($beforeCount + 1)
+            $title | Should Be $expectedTitle
+            "tell application ""TextEdit"" to close window ""$expectedTitle""" | osascript
+            'tell application "TextEdit" to quit' | osascript
+        }
+    }
+
+    It "Should invoke an executable file without error" {
+        $ping = Get-Command "ping" -CommandType Application | ForEach-Object Source
+        $redirectFile = Join-Path -Path $TestDrive -ChildPath "redirect2.txt"
+
+        if ($IsWindows) {
+            if ([System.Management.Automation.Platform]::IsNanoServer -or [System.Management.Automation.Platform]::IsIoT) {
+                ## On headless SKUs, we use `UseShellExecute = false`
+                ## 'ping.exe' on Windows writes out usage to stdout.
+                & $powershell -noprofile -c "Invoke-Item '$ping'" > $redirectFile
+                Get-Content $redirectFile -Raw | Should Match "usage: ping"
+            } else {
+                ## On full desktop, we use `UseShellExecute = true` to align with Windows PowerShell
+                $notepad = Get-Command "notepad.exe" -CommandType Application | ForEach-Object Source
+                $notepadProcessName = "notepad"
+                Get-Process -Name $notepadProcessName | Stop-Process -Force
+                Invoke-Item -Path $notepad
+                $notepadProcess = Get-Process -Name $notepadProcessName
+                $notepadProcess.Name | Should Be $notepadProcessName
+                Stop-Process -InputObject $notepadProcess
+            }
+        } else {
+            ## On Unix, we use `UseShellExecute = false`
+            ## 'ping' on Unix write out usage to stderr
+            & $powershell -noprofile -c "Invoke-Item '$ping'" 2> $redirectFile
+            Get-Content $redirectFile -Raw | Should Match "usage: ping"
+        }
+    }
+
+    Context "Invoke a folder" {
+        BeforeAll {
+            $supportedEnvironment = $true
+            if ($IsLinux)
+            {
+                $appFolder = "$HOME/.local/share/applications"
+                if (Test-Path $appFolder)
+                {
+                    $mimeDefault = xdg-mime query default inode/directory
+                    Remove-Item $HOME/InvokeItemTest.Success -Force -ErrorAction SilentlyContinue
+                    Set-Content -Path "$appFolder/InvokeItemTest.desktop" -Force -Value @"
+[Desktop Entry]
+Version=1.0
+Name=InvokeItemTest
+Comment=Validate Invoke-Item for directory
+Exec=/bin/sh -c 'echo %u > ~/InvokeItemTest.Success'
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Application;
+"@
+                    xdg-mime default InvokeItemTest.desktop inode/directory
+                }
+                else
+                {
+                    $supportedEnvironment = $false
+                }
+            }
+        }
+
+        AfterAll {
+            if ($IsLinux -and $supportedEnvironment)
+            {
+                xdg-mime default $mimeDefault inode/directory
+                Remove-Item $appFolder/InvokeItemTest.desktop -Force -ErrorAction SilentlyContinue
+                Remove-Item $HOME/InvokeItemTest.Success -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It "Should invoke a folder without error" -Skip:(!$supportedEnvironment) {
+            if ($IsWindows)
+            {
+                $shell = New-Object -ComObject "Shell.Application"
+                $windows = $shell.Windows()
+
+                $before = $windows.Count
+                Invoke-Item -Path $PSHOME
+                $startTime = Get-Date
+                # may take time for explorer to open window
+                while (((Get-Date) - $startTime).TotalSeconds -lt 10 -and ($windows.Count -eq $before))
+                {
+                    Start-Sleep -Milliseconds 100
+                }
+                $after = $windows.Count
+
+                $before + 1 | Should Be $after
+                $item = $windows.Item($after - 1)
+                $item.LocationURL | Should Match ($PSHOME -replace '\\', '/')
+                ## close the windows explorer
+                $item.Quit()
+            }
+            elseif ($IsLinux)
+            {
+                # validate on Unix by reassociating default app for directories
+                Invoke-Item -Path $PSHOME
+                $startTime = Get-Date
+                # may take time for handler to start
+                while (((Get-Date) - $startTime).TotalSeconds -lt 10 -and (-not (Test-Path "$HOME/InvokeItemTest.Success")))
+                {
+                    Start-Sleep -Milliseconds 100
+                }
+                Get-Content $HOME/InvokeItemTest.Success | Should Be $PSHOME
+            }
+            else
+            {
+                # validate on MacOS by using AppleScript
+                $beforeCount = [int]('tell application "Finder" to count of windows' | osascript)
+                Invoke-Item -Path $PSHOME
+                $startTime = Get-Date
+                $expectedTitle = Split-Path $PSHOME -Leaf
+                $title = [String]::Empty
+                while (((Get-Date) - $startTime).TotalSeconds -lt 10 -and ($title -ne $expectedTitle))
+                {
+                    Start-Sleep -Milliseconds 100
+                    $title = 'tell application "Finder" to get name of front window' | osascript
+                }
+                $afterCount = [int]('tell application "Finder" to count of windows' | osascript)
+                $afterCount | Should Be ($beforeCount + 1)
+                $title | Should Be $expectedTitle
+                'tell application "Finder" to close front window' | osascript
+            }
+        }
     }
 }
 

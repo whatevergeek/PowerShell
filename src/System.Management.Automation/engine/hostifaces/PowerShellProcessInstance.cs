@@ -37,10 +37,10 @@ namespace System.Management.Automation.Runspaces
         static PowerShellProcessInstance()
         {
 #if UNIX
-            s_PSExePath = Path.Combine(Utils.GetApplicationBase(Utils.DefaultPowerShellShellID),
+            s_PSExePath = Path.Combine(Utils.DefaultPowerShellAppBase,
                             "powershell");
 #else
-            s_PSExePath = Path.Combine(Utils.GetApplicationBase(Utils.DefaultPowerShellShellID),
+            s_PSExePath = Path.Combine(Utils.DefaultPowerShellAppBase,
                             "powershell.exe");
 #endif
         }
@@ -126,11 +126,7 @@ namespace System.Management.Automation.Runspaces
 
                 _startInfo.UserName = netCredential.UserName;
                 _startInfo.Domain = string.IsNullOrEmpty(netCredential.Domain) ? "." : netCredential.Domain;
-#if CORECLR
-                _startInfo.PasswordInClearText = ClrFacade.ConvertSecureStringToString(credential.Password);
-#else
                 _startInfo.Password = credential.Password;
-#endif
             }
 
             Process = new Process { StartInfo = _startInfo, EnableRaisingEvents = true };

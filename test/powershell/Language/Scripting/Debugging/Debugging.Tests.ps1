@@ -1,7 +1,7 @@
 $script1 = @'
 'aaa'.ToString() > $null
 'aa' > $null
-"a" 2> $null | % { $_ }
+"a" 2> $null | ForEach-Object { $_ }
 'bb' > $null
 'bb'.ToSTring() > $null
 'bbb'
@@ -12,14 +12,10 @@ $script2 = @'
 "line 3"
 '@
 
-$testroot = resolve-path (join-path $psscriptroot ../../..)
-$common = join-path $testroot Common
-$helperModule = join-path $common Test.Helpers.psm1
-
 Describe "Breakpoints when set should be hit" -tag "CI" {
     BeforeAll {
         $path = setup -pass -f TestScript_1.ps1 -content $script1
-        $bps = 1..6 | %{ set-psbreakpoint -script $path -line $_ -Action { continue } }
+        $bps = 1..6 | ForEach-Object { set-psbreakpoint -script $path -line $_ -Action { continue } }
     }
     AfterAll {
         $bps | Remove-PSBreakPoint
@@ -34,7 +30,6 @@ Describe "Breakpoints when set should be hit" -tag "CI" {
 
 Describe "It should be possible to reset runspace debugging" -tag "Feature" {
     BeforeAll {
-        import-module $helperModule
         $path = setup -pass -f TestScript_2.ps1 -content $script2
         $scriptPath = "$testdrive/TestScript_2.ps1"
         $iss = [initialsessionstate]::CreateDefault2();
@@ -63,8 +58,8 @@ Describe "It should be possible to reset runspace debugging" -tag "Feature" {
         $rs.ResetRunspaceState()
     }
     AfterAll {
-        if ( $ps -ne $null ) { $ps.Dispose() }
-        if ( $ss -ne $null ) { $rs.Dispose() }
+        if ( $null -ne $ps ) { $ps.Dispose() }
+        if ( $null -ne $ss ) { $rs.Dispose() }
     }
     It "2 breakpoints should have been set" {
         $breakpoints.Count | Should be 2

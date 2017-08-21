@@ -10,14 +10,9 @@ Copyright (c) Microsoft Corporation.  All rights reserved.
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Management.Automation.Internal;
+using System.Runtime.ConstrainedExecution;
 using DWORD = System.UInt32;
 using BOOL = System.UInt32;
-#if CORECLR
-// Use stub for ReliabilityContractAttribute
-using Microsoft.PowerShell.CoreClr.Stubs;
-#else
-using System.Runtime.ConstrainedExecution;
-#endif
 
 namespace System.Management.Automation.Security
 {
@@ -1038,13 +1033,13 @@ namespace System.Management.Automation.Security
                     wtdBuffer);
 #pragma warning enable 56523
 
-                wtd = ClrFacade.PtrToStructure<WINTRUST_DATA>(wtdBuffer);
+                wtd = Marshal.PtrToStructure<WINTRUST_DATA>(wtdBuffer);
             }
             finally
             {
-                ClrFacade.DestroyStructure<WINTRUST_DATA>(wtdBuffer);
+                Marshal.DestroyStructure<WINTRUST_DATA>(wtdBuffer);
                 Marshal.FreeCoTaskMem(wtdBuffer);
-                ClrFacade.DestroyStructure<Guid>(WINTRUST_ACTION_GENERIC_VERIFY_V2);
+                Marshal.DestroyStructure<Guid>(WINTRUST_ACTION_GENERIC_VERIFY_V2);
                 Marshal.FreeCoTaskMem(WINTRUST_ACTION_GENERIC_VERIFY_V2);
             }
 
@@ -1053,15 +1048,15 @@ namespace System.Management.Automation.Security
             if (wtd.dwUnionChoice == (DWORD)WintrustUnionChoice.WTD_CHOICE_BLOB)
             {
                 WINTRUST_BLOB_INFO originalBlob =
-                    (WINTRUST_BLOB_INFO)ClrFacade.PtrToStructure<WINTRUST_BLOB_INFO>(wtd.Choice.pBlob);
+                    (WINTRUST_BLOB_INFO)Marshal.PtrToStructure<WINTRUST_BLOB_INFO>(wtd.Choice.pBlob);
                 Marshal.FreeCoTaskMem(originalBlob.pbMemObject);
 
-                ClrFacade.DestroyStructure<WINTRUST_BLOB_INFO>(wtd.Choice.pBlob);
+                Marshal.DestroyStructure<WINTRUST_BLOB_INFO>(wtd.Choice.pBlob);
                 Marshal.FreeCoTaskMem(wtd.Choice.pBlob);
             }
             else
             {
-                ClrFacade.DestroyStructure<WINTRUST_FILE_INFO>(wtd.Choice.pFile);
+                Marshal.DestroyStructure<WINTRUST_FILE_INFO>(wtd.Choice.pFile);
                 Marshal.FreeCoTaskMem(wtd.Choice.pFile);
             }
 
@@ -1175,27 +1170,12 @@ namespace System.Management.Automation.Security
             }
             finally
             {
-                ClrFacade.DestroyStructure<WINTRUST_DATA>(wtdBuffer);
+                Marshal.DestroyStructure<WINTRUST_DATA>(wtdBuffer);
                 Marshal.FreeCoTaskMem(wtdBuffer);
-                ClrFacade.DestroyStructure<Guid>(WINTRUST_ACTION_GENERIC_VERIFY_V2);
+                Marshal.DestroyStructure<Guid>(WINTRUST_ACTION_GENERIC_VERIFY_V2);
                 Marshal.FreeCoTaskMem(WINTRUST_ACTION_GENERIC_VERIFY_V2);
             }
         }
-
-        /// Return Type: BOOL->int
-        ///pSignerCert: PCCERT_CONTEXT->CERT_CONTEXT*
-        ///hCertBag: HCERTSTORE->void*
-        ///fTrustTestCert: BOOL->int
-        [DllImportAttribute("wintrust.dll", EntryPoint = "WTHelperIsChainedToMicrosoft")]
-        [return: MarshalAsAttribute(UnmanagedType.Bool)]
-        internal static extern bool WTHelperIsChainedToMicrosoft([InAttribute()] ref CERT_CONTEXT pSignerCert, [InAttribute()] System.IntPtr hCertBag, [MarshalAsAttribute(UnmanagedType.Bool)] bool fTrustTestCert);
-
-        /// Return Type: BOOL->int
-        ///hWVTStateData: HANDLE->void*
-        ///fTrustTestCert: BOOL->int
-        [DllImportAttribute("wintrust.dll", EntryPoint = "WTHelperIsChainedToMicrosoftFromStateData")]
-        [return: MarshalAsAttribute(UnmanagedType.Bool)]
-        internal static extern bool WTHelperIsChainedToMicrosoftFromStateData([InAttribute()] System.IntPtr hWVTStateData, [MarshalAsAttribute(UnmanagedType.Bool)] bool fTrustTestCert);
 
         //
         // stuff required for getting cert extensions
@@ -1458,59 +1438,6 @@ namespace System.Management.Automation.Security
             CRYPT_DECODE_ENABLE_UTF8PERCENT_FLAG = 0x04000000,
             CRYPT_DECODE_ENABLE_IA5CONVERSION_FLAG = (CRYPT_DECODE_ENABLE_PUNYCODE_FLAG | CRYPT_DECODE_ENABLE_UTF8PERCENT_FLAG),
         }
-
-        // -------------------------------------------------------------------
-        // certca.dll stuff
-        //
-
-        [DllImport("certca.dll")]
-        internal static extern
-        int CCFindCertificateBuildFilter(
-                        [MarshalAsAttribute(UnmanagedType.LPWStr)]
-                        string filter,
-                        ref IntPtr certFilter);
-
-        [DllImport("certca.dll")]
-        internal static extern
-        void CCFindCertificateFreeFilter(
-                        IntPtr certFilter);
-
-
-        [DllImport("certca.dll")]
-        internal static extern
-        IntPtr CCFindCertificateFromFilter(
-                        IntPtr storeHandle,
-                        IntPtr certFilter,
-                        IntPtr prevCertContext);
-
-        [DllImport("certca.dll")]
-        internal static extern
-        int // HRESULT
-        CCGetCertNameList(
-                        IntPtr certContext,
-                        AltNameType dwAltNameChoice,
-                        CryptDecodeFlags dwFlags,
-                        out DWORD cName,
-                        out IntPtr papwszName);
-
-        [DllImport("certca.dll")]
-        internal static extern
-        void CCFreeStringArray(IntPtr papwsz);
-    }
-
-    internal static partial class NativeMethods
-    {
-        // HRESULT LogCertDelete(")
-        //             __in bool fMachine,")
-        //             __in PCCERT_CONTEXT pCertContext)
-        [DllImport("certenroll.dll")]
-        internal static extern int LogCertDelete(bool fMachine, IntPtr pCertContext);
-
-        // HRESULT LogCertCopy(")
-        //             __in bool fMachine,")
-        //             __in PCCERT_CONTEXT pCertContext)
-        [DllImport("certenroll.dll")]
-        internal static extern int LogCertCopy(bool fMachine, IntPtr pCertContext);
     }
 
     #region Check_UI_Allowed
@@ -1859,8 +1786,8 @@ namespace System.Management.Automation.Security
             uint nAclLength,
             uint dwAclRevision);
 
-        [DllImport("ntdll.dll", CharSet = CharSet.Unicode)]
-        internal static extern uint RtlAddScopedPolicyIDAce(
+        [DllImport("api-ms-win-security-base-l1-2-0.dll", CharSet = CharSet.Unicode)]
+        internal static extern uint AddScopedPolicyIDAce(
             IntPtr Acl,
             uint AceRevision,
             uint AceFlags,

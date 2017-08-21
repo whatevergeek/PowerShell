@@ -1,5 +1,4 @@
-﻿Import-Module $PSScriptRoot\..\LanguageTestSupport.psm1
-set-strictmode -v 2
+﻿set-strictmode -v 2
 
 Describe 'for statement parsing' -Tags "CI" {
     ShouldBeParseError 'for' MissingOpenParenthesisAfterKeyword 4 -CheckColumnNumber
@@ -278,7 +277,6 @@ Describe 'Pipes parsing' -Tags "CI" {
     ShouldBeParseError 'gps|' EmptyPipeElement 4
     ShouldBeParseError '1|1' ExpressionsMustBeFirstInPipeline 2
     ShouldBeParseError '$a=' ExpectedValueExpression 3
-    ShouldBeParseError '1 &' UnexpectedToken,MissingExpression 2,2
 }
 
 Describe 'commands parsing' -Tags "CI" {
@@ -303,4 +301,17 @@ Describe 'expressions parsing' -Tags "CI" {
 
 Describe 'Hash Expression parsing' -Tags "CI" {
     ShouldBeParseError '@{ a=1;b=2;c=3;' MissingEndCurlyBrace 2
+}
+
+Describe 'Unicode escape sequence parsing' -Tag "CI" {
+    ShouldBeParseError '"`u{}"' InvalidUnicodeEscapeSequence 1                 # error span is >>`u{}<<
+    ShouldBeParseError '"`u{219z}"' InvalidUnicodeEscapeSequence 7             # error offset is "`u{219>>z<<}"
+    ShouldBeParseError '"`u{12345z}"' InvalidUnicodeEscapeSequence 9           # error offset is "`u{12345>>z<<}"
+    ShouldBeParseError '"`u{1234567}"' TooManyDigitsInUnicodeEscapeSequence 10 # error offset is "`u{123456>>7<<}"
+    ShouldBeParseError '"`u{110000}"' InvalidUnicodeEscapeSequenceValue 4      # error offset is "`u{>>1<<10000}"
+    ShouldBeParseError '"`u2195}"' InvalidUnicodeEscapeSequence 1
+    ShouldBeParseError '"`u{' InvalidUnicodeEscapeSequence,TerminatorExpectedAtEndOfString 4,0
+    ShouldBeParseError '"`u{1' InvalidUnicodeEscapeSequence,TerminatorExpectedAtEndOfString 5,0
+    ShouldBeParseError '"`u{123456' MissingUnicodeEscapeSequenceTerminator,TerminatorExpectedAtEndOfString 10,0
+    ShouldBeParseError '"`u{1234567' TooManyDigitsInUnicodeEscapeSequence,TerminatorExpectedAtEndOfString 10,0
 }

@@ -24,12 +24,6 @@ using Dbg = System.Management.Automation;
 using System.Runtime.InteropServices;
 using System.Management.Automation.Runspaces;
 
-#if CORECLR
-// Use stubs for SafeHandleZeroOrMinusOneIsInvalid and SecurityZone
-using Microsoft.PowerShell.CoreClr.Stubs;
-using Environment = System.Management.Automation.Environment;
-#endif
-
 namespace Microsoft.PowerShell.Commands
 {
     #region FileSystemProvider
@@ -61,6 +55,11 @@ namespace Microsoft.PowerShell.Commands
         // maximum fragment size value for security.  If FILETRANSFERSIZE changes make sure the
         // copy script will accomodate the new value.
         private const int FILETRANSFERSIZE = 4 * 1024 * 1024;
+
+        // The name of the key in an exception's Data dictionary when attempting
+        // to copy an item onto itself.
+        private const string SelfCopyDataKey = "SelfCopy";
+
 
         /// <summary>
         /// An instance of the PSTraceSource class used for trace output
@@ -266,9 +265,7 @@ namespace Microsoft.PowerShell.Commands
                     string.IsNullOrEmpty(this.ProviderInfo.HelpFile) ? "" : this.ProviderInfo.HelpFile);
 
                 XmlReaderSettings settings = new XmlReaderSettings();
-#if !CORECLR    // No XmlReaderSettings.XmlResolver in CoreCLR
                 settings.XmlResolver = null;
-#endif
                 reader = XmlReader.Create(fullHelpPath, settings);
                 document.Load(reader);
 
@@ -1323,28 +1320,44 @@ namespace Microsoft.PowerShell.Commands
 
             if (ShouldProcess(resource, action))
             {
-                System.Diagnostics.Process invokeProcess = new System.Diagnostics.Process();
-
+                var invokeProcess = new System.Diagnostics.Process();
+                invokeProcess.StartInfo.FileName = path;
 #if UNIX
-                invokeProcess.StartInfo.FileName = Platform.IsLinux ? "xdg-open" : /* OS X */ "open";
-                invokeProcess.StartInfo.Arguments = path;
-                invokeProcess.Start();
-#elif CORECLR
-                try
+                bool invokeDefaultProgram = false;
+                if (Directory.Exists(path))
                 {
-                    // Try Process.Start first. This works for executables even on headless SKUs.
-                    invokeProcess.StartInfo.FileName = path;
+                    // Path points to a directory. We have to use xdg-open/open on Linux/OSX.
+                    invokeDefaultProgram = true;
+                }
+                else
+                {
+                    try
+                    {
+                        // Try Process.Start first. This works for executables on Win/Unix platforms
+                        invokeProcess.Start();
+                    }
+                    catch (Win32Exception ex) when (ex.NativeErrorCode == 13)
+                    {
+                        // Error code 13 -- Permission denied
+                        // The file is possibly not an executable. We try xdg-open/open on Linux/OSX.
+                        invokeDefaultProgram = true;
+                    }
+                }
+
+                if (invokeDefaultProgram)
+                {
+                    const string quoteFormat = "\"{0}\"";
+                    invokeProcess.StartInfo.FileName = Platform.IsLinux ? "xdg-open" : /* OS X */ "open";
+                    if (NativeCommandParameterBinder.NeedQuotes(path))
+                    {
+                        path = string.Format(CultureInfo.InvariantCulture, quoteFormat, path);
+                    }
+                    invokeProcess.StartInfo.Arguments = path;
                     invokeProcess.Start();
                 }
-                catch (Win32Exception)
-                {
-                    // If it's headless SKUs, rethrow.
-                    if (Platform.IsNanoServer || Platform.IsIoT) { throw; }
-                    // If it's full Windows, then try ShellExecute.
-                    ShellExecuteHelper.Start(invokeProcess.StartInfo);
-                }
 #else
-                invokeProcess.StartInfo.FileName = path;
+                // Use ShellExecute when it's not a headless SKU
+                invokeProcess.StartInfo.UseShellExecute = Platform.IsWindowsDesktop;
                 invokeProcess.Start();
 #endif
             }
@@ -1519,16 +1532,19 @@ namespace Microsoft.PowerShell.Commands
                 if (isDirectory)
                 {
                     DirectoryInfo directory = new DirectoryInfo(path);
+                    InodeTracker tracker = null;
 
-                    if (!Platform.IsWindows && Platform.NonWindowsIsSymLink(directory))
+                    if (recurse)
                     {
-                        // For Linux, treat symlink to directories like a file
-                        WriteItemObject(directory, path, false);
-                        return;
+                        GetChildDynamicParameters fspDynamicParam = DynamicParameters as GetChildDynamicParameters;
+                        if (fspDynamicParam != null && fspDynamicParam.FollowSymlink)
+                        {
+                            tracker = new InodeTracker(directory.FullName);
+                        }
                     }
 
                     // Enumerate the directory
-                    Dir(directory, recurse, depth, nameOnly, returnContainers);
+                    Dir(directory, recurse, depth, nameOnly, returnContainers, tracker);
                 }
                 else
                 {
@@ -1597,7 +1613,8 @@ namespace Microsoft.PowerShell.Commands
             bool recurse,
             uint depth,
             bool nameOnly,
-            ReturnContainers returnContainers)
+            ReturnContainers returnContainers,
+            InodeTracker tracker)   // tracker will be non-null only if the user invoked the -FollowSymLinks and -Recurse switch parameters.
         {
             List<IEnumerable<FileSystemInfo>> target = new List<IEnumerable<FileSystemInfo>>();
 
@@ -1665,50 +1682,66 @@ namespace Microsoft.PowerShell.Commands
                             return;
                         }
 
-                        bool attributeFilter = true;
-                        bool switchAttributeFilter = true;
-                        bool filterHidden = false;           // "Hidden" is specified somewhere in the expression
-                        bool switchFilterHidden = false;     // "Hidden" is specified somewhere in the parameters
-
-                        if (null != evaluator)
+                        try
                         {
-                            attributeFilter = evaluator.Evaluate(filesystemInfo.Attributes);  // expressions
-                            filterHidden = evaluator.ExistsInExpression(FileAttributes.Hidden);
-                        }
-                        if (null != switchEvaluator)
-                        {
-                            switchAttributeFilter = switchEvaluator.Evaluate(filesystemInfo.Attributes);  // switch parameters
-                            switchFilterHidden = switchEvaluator.ExistsInExpression(FileAttributes.Hidden);
-                        }
+                            bool attributeFilter = true;
+                            bool switchAttributeFilter = true;
+                            // 'Hidden' is specified somewhere in the expression
+                            bool filterHidden = false;
+                            // 'Hidden' is specified somewhere in the parameters
+                            bool switchFilterHidden = false;
 
-                        bool hidden = false;
-                        if (!Force) hidden = (filesystemInfo.Attributes & FileAttributes.Hidden) != 0;
-
-                        // if "Hidden" is explicitly specified anywhere in the attribute filter, then override
-                        // default hidden attribute filter.
-                        // if specification is to return all containers, then do not do attribute filter on
-                        // the containers.
-                        bool attributeSatisfy =
-                            ((attributeFilter && switchAttributeFilter) ||
-                                ((returnContainers == ReturnContainers.ReturnAllContainers) &&
-                                ((filesystemInfo.Attributes & FileAttributes.Directory) != 0)));
-
-                        if (attributeSatisfy && (filterHidden || switchFilterHidden || Force || !hidden))
-                        {
-                            if (nameOnly)
+                            if (null != evaluator)
                             {
-                                WriteItemObject(
-                                    filesystemInfo.Name,
-                                    filesystemInfo.FullName,
-                                    false);
+                                attributeFilter = evaluator.Evaluate(filesystemInfo.Attributes);
+                                filterHidden = evaluator.ExistsInExpression(FileAttributes.Hidden);
                             }
-                            else
+                            if (null != switchEvaluator)
                             {
-                                if (filesystemInfo is FileInfo)
-                                    WriteItemObject(filesystemInfo, filesystemInfo.FullName, false);
+                                switchAttributeFilter = switchEvaluator.Evaluate(filesystemInfo.Attributes);
+                                switchFilterHidden = switchEvaluator.ExistsInExpression(FileAttributes.Hidden);
+                            }
+
+                            bool hidden = false;
+                            if (!Force)
+                            {
+                                hidden = (filesystemInfo.Attributes & FileAttributes.Hidden) != 0;
+                            }
+
+                            // If 'Hidden' is explicitly specified anywhere in the attribute filter, then override
+                            // default hidden attribute filter.
+                            // If specification is to return all containers, then do not do attribute filter on
+                            // the containers.
+                            bool attributeSatisfy =
+                                ((attributeFilter && switchAttributeFilter) ||
+                                    ((returnContainers == ReturnContainers.ReturnAllContainers) &&
+                                    ((filesystemInfo.Attributes & FileAttributes.Directory) != 0)));
+
+                            if (attributeSatisfy && (filterHidden || switchFilterHidden || Force || !hidden))
+                            {
+                                if (nameOnly)
+                                {
+                                    WriteItemObject(
+                                        filesystemInfo.Name,
+                                        filesystemInfo.FullName,
+                                        false);
+                                }
                                 else
-                                    WriteItemObject(filesystemInfo, filesystemInfo.FullName, true);
+                                {
+                                    if (filesystemInfo is FileInfo)
+                                        WriteItemObject(filesystemInfo, filesystemInfo.FullName, false);
+                                    else
+                                        WriteItemObject(filesystemInfo, filesystemInfo.FullName, true);
+                                }
                             }
+                        }
+                        catch (System.IO.FileNotFoundException ex)
+                        {
+                            WriteError(new ErrorRecord(ex, "DirIOError", ErrorCategory.ReadError, directory.FullName));
+                        }
+                        catch (UnauthorizedAccessException ex)
+                        {
+                            WriteError(new ErrorRecord(ex, "DirUnauthorizedAccessError", ErrorCategory.PermissionDenied, directory.FullName));
                         }
                     }// foreach
                 }// foreach
@@ -1742,15 +1775,35 @@ namespace Microsoft.PowerShell.Commands
                                 return;
                             }
 
-
                             bool hidden = false;
-                            if (!Force) hidden = (recursiveDirectory.Attributes & FileAttributes.Hidden) != 0;
+                            if (!Force)
+                            {
+                                hidden = (recursiveDirectory.Attributes & FileAttributes.Hidden) != 0;
+                            }
 
                             // if "Hidden" is explicitly specified anywhere in the attribute filter, then override
                             // default hidden attribute filter.
                             if (Force || !hidden || isFilterHiddenSpecified || isSwitchFilterHiddenSpecified)
                             {
-                                Dir(recursiveDirectory, recurse, depth - 1, nameOnly, returnContainers);
+                                // We only want to recurse into symlinks if
+                                //  a) the user has asked to with the -FollowSymLinks switch parameter and
+                                //  b) the directory pointed to by the symlink has not already been visited,
+                                //     preventing symlink loops.
+                                if (tracker == null)
+                                {
+                                    if (InternalSymbolicLinkLinkCodeMethods.IsReparsePoint(recursiveDirectory))
+                                    {
+                                        continue;
+                                    }
+                                }
+                                else if (!tracker.TryVisitPath(recursiveDirectory.FullName))
+                                {
+                                    WriteWarning(StringUtil.Format(FileSystemProviderStrings.AlreadyListedDirectory,
+                                                                   recursiveDirectory.FullName));
+                                    continue;
+                                }
+
+                                Dir(recursiveDirectory, recurse, depth - 1, nameOnly, returnContainers, tracker);
                             }
                         }//foreach
                     }//if
@@ -2138,9 +2191,9 @@ namespace Microsoft.PowerShell.Commands
                     // non-existing targets on either Windows or Linux.
                     try
                     {
-                        exists = (itemType == ItemType.SymbolicLink)
-                            ? true // pretend it exists if we're making a symbolic link
-                            : CheckItemExists(strTargetPath, out isDirectory);
+                        exists = CheckItemExists(strTargetPath, out isDirectory);
+                        if (itemType == ItemType.SymbolicLink)
+                            exists = true; // pretend the target exists if we're making a symbolic link
                     }
                     catch (Exception e)
                     {
@@ -2214,7 +2267,8 @@ namespace Microsoft.PowerShell.Commands
                     {
                         if (symLinkExists)
                         {
-                            WriteError(new ErrorRecord(new IOException("NewItemIOError"), "NewItemIOError", ErrorCategory.ResourceExists, path));
+                            string message = StringUtil.Format(FileSystemProviderStrings.SymlinkItemExists, path);
+                            WriteError(new ErrorRecord(new IOException(message), "SymLinkExists", ErrorCategory.ResourceExists, path));
                             return;
                         }
                     }
@@ -2861,15 +2915,6 @@ namespace Microsoft.PowerShell.Commands
                 continueRemoval = ShouldProcess(directory.FullName, action);
             }
 
-            //if this is a reparse point and force is not specified then warn user but dont remove the directory.
-            if (Platform.IsWindows && ((directory.Attributes & FileAttributes.ReparsePoint) != 0) && !Force)
-            {
-                String error = StringUtil.Format(FileSystemProviderStrings.DirectoryReparsePoint, directory.FullName);
-                Exception e = new IOException(error);
-                WriteError(new ErrorRecord(e, "DirectoryNotEmpty", ErrorCategory.WriteError, directory));
-                return;
-            }
-
             if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
             {
                 bool success = InternalSymbolicLinkLinkCodeMethods.DeleteJunction(directory.FullName);
@@ -3325,13 +3370,14 @@ namespace Microsoft.PowerShell.Commands
             path = NormalizePath(path);
 
             // First check to see if it is a directory
-
             try
             {
                 DirectoryInfo directory = new DirectoryInfo(path);
 
                 // If the above didn't throw an exception, check to
-                // see if it contains any directories
+                // see if we should proceed and if it contains any children
+                if ((directory.Attributes & FileAttributes.Directory) != FileAttributes.Directory)
+                    return false;
 
                 result = DirectoryInfoHasChildItems(directory);
             }
@@ -3460,14 +3506,14 @@ namespace Microsoft.PowerShell.Commands
             _excludeMatcher = SessionStateUtilities.CreateWildcardsFromStrings(Exclude, WildcardOptions.IgnoreCase);
 
             // if the source and destination path are same (for a local copy) then flag it as error.
-            if ((toSession == null) && (fromSession == null) && path.Equals(destinationPath, StringComparison.OrdinalIgnoreCase))
+            if ((toSession == null) && (fromSession == null) && InternalSymbolicLinkLinkCodeMethods.IsSameFileSystemItem(path, destinationPath))
             {
                 String error = StringUtil.Format(FileSystemProviderStrings.CopyError, path);
                 Exception e = new IOException(error);
+                e.Data[SelfCopyDataKey] = destinationPath;
                 WriteError(new ErrorRecord(e, "CopyError", ErrorCategory.WriteError, path));
                 return;
             }
-
             // Copy-Item from session
             if (fromSession != null)
             {
@@ -3777,14 +3823,14 @@ namespace Microsoft.PowerShell.Commands
                 }
 
                 //if the source and destination path are same then flag it as error.
-                if (destinationPath.Equals(file.FullName, StringComparison.OrdinalIgnoreCase))
+                if (InternalSymbolicLinkLinkCodeMethods.IsSameFileSystemItem(destinationPath, file.FullName))
                 {
                     String error = StringUtil.Format(FileSystemProviderStrings.CopyError, destinationPath);
                     Exception e = new IOException(error);
+                    e.Data[SelfCopyDataKey] = file.FullName;
                     WriteError(new ErrorRecord(e, "CopyError", ErrorCategory.WriteError, destinationPath));
                     return;
                 }
-
                 // Verify that the target doesn't represent a device name
                 if (PathIsReservedDeviceName(destinationPath, "CopyError"))
                 {
@@ -4959,6 +5005,23 @@ namespace Microsoft.PowerShell.Commands
                                 return String.Empty;
                             }
 
+#if UNIX
+                            // We don't use the Directory class for Unix because the path
+                            // may contain additional globbing patterns such as '[ab]'
+                            // which Directory.EnumerateFiles() processes, giving undesireable
+                            // results in this context.
+                            if (!Utils.NativeItemExists(result))
+                            {
+                                String error = StringUtil.Format(FileSystemProviderStrings.ItemDoesNotExist, path);
+                                Exception e = new IOException(error);
+                                WriteError(new ErrorRecord(
+                                    e,
+                                    "ItemDoesNotExist",
+                                    ErrorCategory.ObjectNotFound,
+                                    path));
+                                break;
+                            }
+#else
                             string leafName = GetChildName(result);
 
                             // Use the Directory class to get the real path (this will
@@ -4984,6 +5047,7 @@ namespace Microsoft.PowerShell.Commands
                             }
 
                             result = files.First();
+#endif
 
                             if (result.StartsWith(basePath, StringComparison.CurrentCulture))
                             {
@@ -7253,6 +7317,52 @@ namespace Microsoft.PowerShell.Commands
             [MarshalAs(UnmanagedType.LPWStr)]
             public string Provider;
         }
+
+        #region InodeTracker
+        /// <summary>
+        /// Tracks visited files/directories by caching their device IDs and inodes.
+        /// </summary>
+        private class InodeTracker
+        {
+            private HashSet<(UInt64, UInt64)> _visitations;
+
+            /// <summary>
+            /// Construct a new InodeTracker with an initial path
+            /// </summary>
+            internal InodeTracker(string path)
+            {
+                _visitations = new HashSet<(UInt64, UInt64)>();
+
+                if (InternalSymbolicLinkLinkCodeMethods.GetInodeData(path, out (UInt64, UInt64) inodeData))
+                {
+                    _visitations.Add(inodeData);
+                }
+            }
+
+            /// <summary>
+            /// Attempt to mark a path as having been visited.
+            /// </summary>
+            /// <param name="path">
+            /// Path to the file system item to be visited.
+            /// </param>
+            /// <returns>
+            /// True if the path had not been previously visited and was
+            /// successfully marked as visited, false otherwise.
+            /// </returns>
+            internal bool TryVisitPath(string path)
+            {
+                bool returnValue = false;
+
+                if (InternalSymbolicLinkLinkCodeMethods.GetInodeData(path, out (UInt64, UInt64) inodeData))
+                {
+                    returnValue = _visitations.Add(inodeData);
+                }
+
+                return returnValue;
+            }
+        }
+
+        #endregion
     } // class FileSystemProvider
 
     internal static class SafeInvokeCommand
@@ -7416,6 +7526,12 @@ namespace Microsoft.PowerShell.Commands
         public FlagsExpression<FileAttributes> Attributes { get; set; }
 
         /// <summary>
+        /// Gets or sets the flag to follow symbolic links when recursing.
+        /// </summary>
+        [Parameter]
+        public SwitchParameter FollowSymlink { get; set; }
+
+        /// <summary>
         /// Gets or sets the filter directory flag
         /// </summary>
         [Parameter]
@@ -7502,85 +7618,9 @@ namespace Microsoft.PowerShell.Commands
         {
             get
             {
-                return GetEncodingFromEnum(Encoding);
+                return Utils.GetEncodingFromEnum(Encoding);
             }
         } // EncodingType
-
-        /// <summary>
-        /// Converts the stream type string into an Encoding
-        /// </summary>
-        ///
-        /// <param name="type">
-        /// This is a string representation of the encoding. It can be
-        /// "string", "unicode", "bigendianunicode", "ascii", "utf7", or "utf8"
-        ///
-        /// Note, a ToLowerInvariant is done to the type before comparison is made.
-        /// </param>
-        ///
-        /// <returns>
-        /// The encoding that was represented by the string
-        /// </returns>
-        ///
-        /// <throws>
-        /// ArgumentException if type is null, empty, or does not represent one
-        /// of the known encoding types.
-        /// </throws>
-        private static Encoding GetEncodingFromEnum(FileSystemCmdletProviderEncoding type)
-        {
-            System.Text.Encoding encoding;
-
-            switch (type)
-            {
-                case FileSystemCmdletProviderEncoding.String:
-                    encoding = System.Text.Encoding.Unicode;
-                    break;
-
-                case FileSystemCmdletProviderEncoding.Unicode:
-                    encoding = System.Text.Encoding.Unicode;
-                    break;
-
-                case FileSystemCmdletProviderEncoding.BigEndianUnicode:
-                    encoding = System.Text.Encoding.BigEndianUnicode;
-                    break;
-
-                case FileSystemCmdletProviderEncoding.UTF8:
-                    encoding = System.Text.Encoding.UTF8;
-                    break;
-
-                case FileSystemCmdletProviderEncoding.UTF7:
-                    encoding = System.Text.Encoding.UTF7;
-                    break;
-
-                case FileSystemCmdletProviderEncoding.UTF32:
-                    encoding = System.Text.Encoding.UTF32;
-                    break;
-
-                case FileSystemCmdletProviderEncoding.BigEndianUTF32:
-                    encoding = System.Text.Encoding.GetEncoding("utf-32BE");
-                    break;
-
-                case FileSystemCmdletProviderEncoding.Ascii:
-                    encoding = System.Text.Encoding.ASCII;
-                    break;
-
-                case FileSystemCmdletProviderEncoding.Default:
-                    encoding = ClrFacade.GetDefaultEncoding();
-                    break;
-
-                case FileSystemCmdletProviderEncoding.Oem:
-                    {
-                        encoding = ClrFacade.GetOEMEncoding();
-                    }
-                    break;
-
-                default:
-                    // Default to unicode encoding
-                    encoding = System.Text.Encoding.Unicode;
-                    break;
-            }
-
-            return encoding;
-        } // GetEncodingFromEnum
 
         /// <summary>
         /// Gets the Byte Encoding status of the StreamType parameter.  Returns true
@@ -8096,7 +8136,7 @@ namespace Microsoft.PowerShell.Commands
 
             using (SafeFileHandle handle = OpenReparsePoint(filePath, FileDesiredAccess.GenericRead))
             {
-                int outBufferSize = ClrFacade.SizeOf<REPARSE_DATA_BUFFER_SYMBOLICLINK>();
+                int outBufferSize = Marshal.SizeOf<REPARSE_DATA_BUFFER_SYMBOLICLINK>();
 
                 IntPtr outBuffer = Marshal.AllocHGlobal(outBufferSize);
                 bool success = false;
@@ -8126,7 +8166,7 @@ namespace Microsoft.PowerShell.Commands
                             throw new Win32Exception(lastError);
                     }
 
-                    REPARSE_DATA_BUFFER_SYMBOLICLINK reparseDataBuffer = ClrFacade.PtrToStructure<REPARSE_DATA_BUFFER_SYMBOLICLINK>(outBuffer);
+                    REPARSE_DATA_BUFFER_SYMBOLICLINK reparseDataBuffer = Marshal.PtrToStructure<REPARSE_DATA_BUFFER_SYMBOLICLINK>(outBuffer);
 
                     if (reparseDataBuffer.ReparseTag == IO_REPARSE_TAG_SYMLINK)
                         linkType = "SymbolicLink";
@@ -8211,6 +8251,81 @@ namespace Microsoft.PowerShell.Commands
             return isHardLink;
         }
 
+        internal static bool IsSameFileSystemItem(string pathOne, string pathTwo)
+        {
+#if UNIX
+            return Platform.NonWindowsIsSameFileSystemItem(pathOne, pathTwo);
+#else
+            return WinIsSameFileSystemItem(pathOne, pathTwo);
+#endif
+        }
+
+        internal static bool WinIsSameFileSystemItem(string pathOne, string pathTwo)
+        {
+            var access = FileAccess.Read;
+            var share = FileShare.Read;
+            var creation = FileMode.Open;
+            var attributes = FileAttributes.BackupSemantics | FileAttributes.PosixSemantics;
+
+            using (var sfOne = AlternateDataStreamUtilities.NativeMethods.CreateFile(pathOne, access, share, IntPtr.Zero, creation, (int)attributes, IntPtr.Zero))
+            using (var sfTwo = AlternateDataStreamUtilities.NativeMethods.CreateFile(pathTwo, access, share, IntPtr.Zero, creation, (int)attributes, IntPtr.Zero))
+            {
+                if (!sfOne.IsInvalid && !sfTwo.IsInvalid)
+                {
+                    BY_HANDLE_FILE_INFORMATION  infoOne;
+                    BY_HANDLE_FILE_INFORMATION  infoTwo;
+                    if (   GetFileInformationByHandle(sfOne.DangerousGetHandle(), out infoOne)
+                        && GetFileInformationByHandle(sfTwo.DangerousGetHandle(), out infoTwo))
+                    {
+                        return    infoOne.VolumeSerialNumber == infoTwo.VolumeSerialNumber
+                               && infoOne.FileIndexHigh == infoTwo.FileIndexHigh
+                               && infoOne.FileIndexLow == infoTwo.FileIndexLow;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        internal static bool GetInodeData(string path, out System.ValueTuple<UInt64, UInt64> inodeData)
+        {
+#if UNIX
+            bool rv = Platform.NonWindowsGetInodeData(path, out inodeData);
+#else
+            bool rv = WinGetInodeData(path, out inodeData);
+#endif
+            return rv;
+        }
+
+        internal static bool WinGetInodeData(string path, out System.ValueTuple<UInt64, UInt64> inodeData)
+        {
+            var access = FileAccess.Read;
+            var share = FileShare.Read;
+            var creation = FileMode.Open;
+            var attributes = FileAttributes.BackupSemantics | FileAttributes.PosixSemantics;
+
+            using (var sf = AlternateDataStreamUtilities.NativeMethods.CreateFile(path, access, share, IntPtr.Zero, creation, (int)attributes, IntPtr.Zero))
+            {
+                if (!sf.IsInvalid)
+                {
+                    BY_HANDLE_FILE_INFORMATION info;
+
+                    if (GetFileInformationByHandle(sf.DangerousGetHandle(), out info))
+                    {
+                        UInt64 tmp = info.FileIndexHigh;
+                        tmp = (tmp << 32) | info.FileIndexLow;
+
+                        inodeData = (info.VolumeSerialNumber, tmp);
+
+                        return true;
+                    }
+                }
+            }
+
+            inodeData = (0, 0);
+            return false;
+        }
+
         internal static bool IsHardLink(ref IntPtr handle)
         {
 #if UNIX
@@ -8255,7 +8370,7 @@ namespace Microsoft.PowerShell.Commands
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
         private static string WinInternalGetTarget(SafeFileHandle handle)
         {
-            int outBufferSize = ClrFacade.SizeOf<REPARSE_DATA_BUFFER_SYMBOLICLINK>();
+            int outBufferSize = Marshal.SizeOf<REPARSE_DATA_BUFFER_SYMBOLICLINK>();
 
             IntPtr outBuffer = Marshal.AllocHGlobal(outBufferSize);
             bool success = false;
@@ -8282,7 +8397,7 @@ namespace Microsoft.PowerShell.Commands
                 }
 
                 //Unmarshal to symbolic link to look for tags.
-                REPARSE_DATA_BUFFER_SYMBOLICLINK reparseDataBuffer = ClrFacade.PtrToStructure<REPARSE_DATA_BUFFER_SYMBOLICLINK>(outBuffer);
+                REPARSE_DATA_BUFFER_SYMBOLICLINK reparseDataBuffer = Marshal.PtrToStructure<REPARSE_DATA_BUFFER_SYMBOLICLINK>(outBuffer);
 
                 if (reparseDataBuffer.ReparseTag != IO_REPARSE_TAG_SYMLINK && reparseDataBuffer.ReparseTag != IO_REPARSE_TAG_MOUNT_POINT)
                     return null;
@@ -8297,7 +8412,7 @@ namespace Microsoft.PowerShell.Commands
                 if (reparseDataBuffer.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT)
                 {
                     //Since this is a junction we need to unmarshal to the correct structure.
-                    REPARSE_DATA_BUFFER_MOUNTPOINT reparseDataBufferMountPoint = ClrFacade.PtrToStructure<REPARSE_DATA_BUFFER_MOUNTPOINT>(outBuffer);
+                    REPARSE_DATA_BUFFER_MOUNTPOINT reparseDataBufferMountPoint = Marshal.PtrToStructure<REPARSE_DATA_BUFFER_MOUNTPOINT>(outBuffer);
 
                     targetDir = Encoding.Unicode.GetString(reparseDataBufferMountPoint.PathBuffer, reparseDataBufferMountPoint.SubstituteNameOffset, reparseDataBufferMountPoint.SubstituteNameLength);
                 }
@@ -8423,7 +8538,7 @@ namespace Microsoft.PowerShell.Commands
                 using (SafeHandle handle = OpenReparsePoint(junctionPath, FileDesiredAccess.GenericWrite))
                 {
                     bool success = false;
-                    int inOutBufferSize = ClrFacade.SizeOf<REPARSE_GUID_DATA_BUFFER>();
+                    int inOutBufferSize = Marshal.SizeOf<REPARSE_GUID_DATA_BUFFER>();
                     IntPtr outBuffer = Marshal.AllocHGlobal(inOutBufferSize);
                     IntPtr inBuffer = Marshal.AllocHGlobal(inOutBufferSize);
 
@@ -8438,7 +8553,7 @@ namespace Microsoft.PowerShell.Commands
                         // Using the wrong one results in mismatched-tag error.
 
                         REPARSE_GUID_DATA_BUFFER junctionData = new REPARSE_GUID_DATA_BUFFER();
-                        ClrFacade.StructureToPtr<REPARSE_GUID_DATA_BUFFER>(junctionData, outBuffer, false);
+                        Marshal.StructureToPtr<REPARSE_GUID_DATA_BUFFER>(junctionData, outBuffer, false);
 
                         result = DeviceIoControl(dangerousHandle, FSCTL_GET_REPARSE_POINT, IntPtr.Zero, 0,
                             outBuffer, inOutBufferSize, out bytesReturned, IntPtr.Zero);
@@ -8448,11 +8563,11 @@ namespace Microsoft.PowerShell.Commands
                             throw new Win32Exception(lastError);
                         }
 
-                        junctionData = ClrFacade.PtrToStructure<REPARSE_GUID_DATA_BUFFER>(outBuffer);
+                        junctionData = Marshal.PtrToStructure<REPARSE_GUID_DATA_BUFFER>(outBuffer);
                         junctionData.ReparseDataLength = 0;
                         junctionData.DataBuffer = new char[MAX_REPARSE_SIZE];
 
-                        ClrFacade.StructureToPtr<REPARSE_GUID_DATA_BUFFER>(junctionData, inBuffer, false);
+                        Marshal.StructureToPtr<REPARSE_GUID_DATA_BUFFER>(junctionData, inBuffer, false);
 
                         // To delete a reparse point:
                         // ReparseDataLength must be 0
@@ -8647,7 +8762,11 @@ namespace System.Management.Automation.Internal
             }
             string resultPath = path + adjustedStreamName;
 
-            NativeMethods.DeleteFile(resultPath);
+            if (!NativeMethods.DeleteFile(resultPath))
+            {
+                int error = Marshal.GetLastWin32Error();
+                throw new Win32Exception(error);
+            }
         }
 
         internal static void SetZoneOfOrigin(string path, SecurityZone securityZone)
@@ -8664,7 +8783,7 @@ namespace System.Management.Automation.Internal
             // the code above seems cleaner and more robust than the IAttachmentExecute approach
         }
 
-        private static class NativeMethods
+        internal static class NativeMethods
         {
             internal const int ERROR_HANDLE_EOF = 38;
             internal enum StreamInfoLevels { FindStreamInfoStandard = 0 }
@@ -8802,12 +8921,12 @@ namespace System.Management.Automation.Internal
                 [int] $fragmentLength
             )
 
-            if (($resolvedPath.Drive -ne $null) -and ($resolvedPath.Drive.MaximumSize -ne $null))
+            if (($null -ne $resolvedPath.Drive) -and ($null -ne $resolvedPath.Drive.MaximumSize))
             {{
                 $maxUserSize = $resolvedPath.Drive.MaximumSize
                 $dirSize = 0
-                Microsoft.PowerShell.Management\Get-ChildItem -LiteralPath ($resolvedPath.Drive.Name + "":"") -Recurse | Foreach {{
-                    Microsoft.PowerShell.Management\Get-Item -LiteralPath $_.FullName -Stream * | % {{ $dirSize += $_.Length }}
+                Microsoft.PowerShell.Management\Get-ChildItem -LiteralPath ($resolvedPath.Drive.Name + "":"") -Recurse | ForEach-Object {{
+                    Microsoft.PowerShell.Management\Get-Item -LiteralPath $_.FullName -Stream * | ForEach-Object {{ $dirSize += $_.Length }}
                 }}
                 if (($dirSize + $fragmentLength) -gt $maxUserSize)
                 {{
@@ -8886,7 +9005,7 @@ namespace System.Management.Automation.Internal
             }}
             finally
             {{
-                if ($wstream -ne $null)
+                if ($null -ne $wstream)
                 {{
                     $wstream.Dispose()
                 }}
@@ -9317,7 +9436,7 @@ namespace System.Management.Automation.Internal
                 }}
                 finally
                 {{
-                    if ($rstream -ne $null)
+                    if ($null -ne $rstream)
                     {{
                         $rstream.Dispose()
                     }}
@@ -9807,7 +9926,7 @@ namespace System.Management.Automation.Internal
 
         # Get the root path using Get-Item
         $item = Microsoft.PowerShell.Management\Get-Item $pathToValidate -ea SilentlyContinue
-        if (($item -ne $null) -and ($item[0].PSProvider.Name -eq 'FileSystem'))
+        if (($null -ne $item) -and ($item[0].PSProvider.Name -eq 'FileSystem'))
         {
             $result['Root'] = SafeGetDriveRoot $item[0].PSDrive
             return $result

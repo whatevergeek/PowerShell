@@ -1,3 +1,4 @@
+#if LEGACYTELEMETRY
 /********************************************************************++
 Copyright (c) Microsoft Corporation.  All rights reserved.
 --********************************************************************/
@@ -11,11 +12,6 @@ using System.Management.Automation;
 using System.Management.Automation.Language;
 using System.Threading;
 using System.Threading.Tasks;
-#if CORECLR
-using Environment = System.Management.Automation.Environment;
-#else
-using Environment = System.Environment;
-#endif
 
 namespace Microsoft.PowerShell.Telemetry.Internal
 {
@@ -58,12 +54,7 @@ namespace Microsoft.PowerShell.Telemetry.Internal
             if (Interlocked.CompareExchange(ref s_anyPowerShellSessionOpen, 1, 0) == 1)
                 return;
 
-            bool is32Bit;
-#if CORECLR
-            is32Bit = IntPtr.Size == 4;
-#else
-            is32Bit = !Environment.Is64BitProcess;
-#endif
+            bool is32Bit = !Environment.Is64BitProcess;
             var psversion = PSVersionInfo.PSVersion.ToString();
             var hostName = Process.GetCurrentProcess().ProcessName;
             if (ihptd != null)
@@ -173,9 +164,9 @@ namespace Microsoft.PowerShell.Telemetry.Internal
             var companyName = foundModule.CompanyName;
             bool couldBeMicrosoftModule =
                 (modulePath != null &&
-                 (modulePath.StartsWith(Utils.GetApplicationBase(Utils.DefaultPowerShellShellID), StringComparison.OrdinalIgnoreCase) ||
+                 (modulePath.StartsWith(Utils.DefaultPowerShellAppBase, StringComparison.OrdinalIgnoreCase) ||
                   // The following covers both 64 and 32 bit Program Files by assuming 32bit is just ...\Program Files + " (x86)"
-                  modulePath.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), StringComparison.OrdinalIgnoreCase))) ||
+                  modulePath.StartsWith(Platform.GetFolderPath(Environment.SpecialFolder.ProgramFiles), StringComparison.OrdinalIgnoreCase))) ||
                 (companyName != null &&
                  foundModule.CompanyName.StartsWith("Microsoft", StringComparison.OrdinalIgnoreCase));
             if (couldBeMicrosoftModule)
@@ -524,3 +515,4 @@ namespace Microsoft.PowerShell.Telemetry.Internal
         int InteractiveCommandCount { get; }
     }
 }
+#endif

@@ -1,12 +1,10 @@
 # Docker image file that describes an Ubuntu16.04 image with PowerShell installed from Microsoft APT Repo
 
 FROM ubuntu:xenial
-MAINTAINER Raghu Shantha <raghus@microsoft.com>
 
-# Setup the locale
-ENV LANG en_US.UTF-8
-ENV LC_ALL $LANG
-RUN locale-gen $LANG && update-locale
+LABEL maintainer="PowerShell Team <powershellteam@hotmail.com>"
+LABEL readme.md="https://github.com/PowerShell/PowerShell/blob/master/docker/README.md"
+LABEL description="This Dockerfile will install the latest release of PS."
 
 # Install dependencies and clean up
 RUN apt-get update \
@@ -14,9 +12,15 @@ RUN apt-get update \
         apt-utils \
         ca-certificates \
         curl \
-        apt-transport-https \	
+        apt-transport-https \
+        locales\
     && rm -rf /var/lib/apt/lists/*
-    
+
+# Setup the locale
+ENV LANG en_US.UTF-8
+ENV LC_ALL $LANG
+RUN locale-gen $LANG && update-locale
+
 # Import the public repository GPG keys for Microsoft
 RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add -
 	
@@ -30,4 +34,4 @@ RUN apt-get update \
 
 # Use PowerShell as the default shell
 # Use array to avoid Docker prepending /bin/sh -c
-ENTRYPOINT [ "powershell" ]
+CMD [ "powershell" ]

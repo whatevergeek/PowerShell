@@ -5,14 +5,8 @@ Copyright (c) Microsoft Corporation.  All rights reserved.
 using System.Runtime.InteropServices;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.Win32.SafeHandles;
-
-#if CORECLR
-// Use stubs for SafeHandleZeroOrMinusOneIsInvalid, SecurityPermissionAttribute and ReliabilityContractAttribute
-using Microsoft.PowerShell.CoreClr.Stubs;
-#else
 using System.Security.Permissions;
 using System.Runtime.ConstrainedExecution;
-#endif
 
 namespace System.Management.Automation
 {
@@ -343,7 +337,7 @@ namespace System.Management.Automation
                             // The specified privilege is not enabled yet. Enable it.
                             newPrivilegeState.PrivilegeCount = 1;
                             newPrivilegeState.Privilege.Attributes = SE_PRIVILEGE_ENABLED;
-                            int bufferSize = ClrFacade.SizeOf<TOKEN_PRIVILEGE>();
+                            int bufferSize = Marshal.SizeOf<TOKEN_PRIVILEGE>();
                             int returnSize = 0;
 
                             // enable the specified privilege
@@ -412,7 +406,7 @@ namespace System.Management.Automation
                     IntPtr tokenHandler = IntPtr.Zero;
                     if (OpenProcessToken(processHandler, TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, out tokenHandler))
                     {
-                        int bufferSize = ClrFacade.SizeOf<TOKEN_PRIVILEGE>();
+                        int bufferSize = Marshal.SizeOf<TOKEN_PRIVILEGE>();
                         int returnSize = 0;
 
                         // restore the privilege state back to the previous privilege state
@@ -558,7 +552,7 @@ namespace System.Management.Automation
 #if !UNIX
 
         // Fields
-        internal static readonly IntPtr INVALID_HANDLE_VALUE = IntPtr.Zero;
+        internal static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
         internal static UInt32 GENERIC_READ = 0x80000000;
         internal static UInt32 GENERIC_WRITE = 0x40000000;
         internal static UInt32 FILE_ATTRIBUTE_NORMAL = 0x80000000;
@@ -707,6 +701,7 @@ namespace System.Management.Automation
 
         [DllImport(PinvokeDllNames.ResumeThreadDllName, CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern uint ResumeThread(IntPtr threadHandle);
+        internal static uint RESUME_THREAD_FAILED = System.UInt32.MaxValue; // (DWORD)-1
 
         [DllImport(PinvokeDllNames.CreateFileDllName, CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern System.IntPtr CreateFileW(

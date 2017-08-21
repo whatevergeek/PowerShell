@@ -743,9 +743,7 @@ namespace System.Management.Automation.Remoting
             // This is used by the initial session state configuration providers like Exchange.
             if (Context != null)
             {
-#if !CORECLR // TimeZone Not In CoreCLR
                 _senderInfo.ClientTimeZone = Context.ClientCapability.TimeZone;
-#endif
             }
 
             _senderInfo.ApplicationArguments = RemotingDecoder.GetApplicationArguments(rcvdData.Data);
@@ -1042,7 +1040,7 @@ namespace System.Management.Automation.Remoting
                         new PSRemotingDataStructureException(RemotingErrorIdStrings.ServerConnectFailedOnNegotiation,
                             RemoteDataNameStrings.PS_STARTUP_PROTOCOL_VERSION_NAME,
                             clientProtocolVersion,
-                            PSVersionInfo.BuildVersion,
+                            PSVersionInfo.GitCommitId,
                             RemotingConstants.ProtocolVersion);
                     throw reasonOfFailure;
                 }
@@ -1092,7 +1090,7 @@ namespace System.Management.Automation.Remoting
                         new PSRemotingDataStructureException(RemotingErrorIdStrings.ServerNegotiationFailed,
                             RemoteDataNameStrings.PS_STARTUP_PROTOCOL_VERSION_NAME,
                             clientProtocolVersion,
-                            PSVersionInfo.BuildVersion,
+                            PSVersionInfo.GitCommitId,
                             RemotingConstants.ProtocolVersion);
                     throw reasonOfFailure;
                 }
@@ -1108,7 +1106,7 @@ namespace System.Management.Automation.Remoting
                     new PSRemotingDataStructureException(RemotingErrorIdStrings.ServerNegotiationFailed,
                         RemoteDataNameStrings.PSVersion,
                         clientPSVersion,
-                        PSVersionInfo.BuildVersion,
+                        PSVersionInfo.GitCommitId,
                         RemotingConstants.ProtocolVersion);
                 throw reasonOfFailure;
             }
@@ -1123,7 +1121,7 @@ namespace System.Management.Automation.Remoting
                     new PSRemotingDataStructureException(RemotingErrorIdStrings.ServerNegotiationFailed,
                         RemoteDataNameStrings.SerializationVersion,
                         clientSerVersion,
-                        PSVersionInfo.BuildVersion,
+                        PSVersionInfo.GitCommitId,
                         RemotingConstants.ProtocolVersion);
                 throw reasonOfFailure;
             }

@@ -1,20 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="..\..\PowerShell.Common.props"/>  
+
   <PropertyGroup>
-    <VersionPrefix>6.0.0</VersionPrefix>
-    <TargetFramework>netstandard1.6</TargetFramework>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <DelaySign>true</DelaySign>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <Description>PowerShell Core's Microsoft.PowerShell.CoreCLR.AssemblyLoadContext project</Description>
     <AssemblyName>Microsoft.PowerShell.CoreCLR.AssemblyLoadContext</AssemblyName>
-    <AssemblyOriginatorKeyFile>../signing/visualstudiopublic.snk</AssemblyOriginatorKeyFile>
-    <SignAssembly>true</SignAssembly>
-    <NetStandardImplicitPackageVersion>1.6.1</NetStandardImplicitPackageVersion>
-    <GenerateAssemblyFileVersionAttribute>false</GenerateAssemblyFileVersionAttribute>
-    <GenerateAssemblyVersionAttribute>false</GenerateAssemblyVersionAttribute>
   </PropertyGroup>
 
-  <PropertyGroup Condition=" '$(TargetFramework)' == 'netstandard1.6' ">
+  <PropertyGroup>
     <DefineConstants>$(DefineConstants);CORECLR</DefineConstants>
   </PropertyGroup>
 
@@ -29,12 +22,5 @@
   <PropertyGroup Condition=" '$(Configuration)' == 'CodeCoverage' ">
     <DebugType>full</DebugType>
   </PropertyGroup>
-
-  <ItemGroup Condition=" '$(TargetFramework)' == 'netstandard1.6' ">
-    <PackageReference Include="System.Runtime.Loader" Version="4.3.0" />
-    <PackageReference Include="System.Reflection.Metadata" Version="1.4.1" />
-    <PackageReference Include="System.Reflection.TypeExtensions" Version="4.3.0" />
-    <PackageReference Include="System.Security.Cryptography.Algorithms" Version="4.3.0" />
-  </ItemGroup>
 
 </Project>

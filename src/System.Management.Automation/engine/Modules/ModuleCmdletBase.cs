@@ -20,13 +20,6 @@ using System.Xml;
 using Microsoft.PowerShell.Cmdletization;
 using Dbg = System.Management.Automation.Diagnostics;
 
-#if CORECLR
-// Some APIs are missing from System.Environment. We use System.Management.Automation.Environment as a proxy type:
-//  - for missing APIs, System.Management.Automation.Environment has extension implementation.
-//  - for existing APIs, System.Management.Automation.Environment redirect the call to System.Environment.
-using Environment = System.Management.Automation.Environment;
-#endif
-
 //
 // Now define the set of commands for manipulating modules.
 //
@@ -620,19 +613,18 @@ namespace Microsoft.PowerShell.Commands
             Guid? savedBaseGuid = BaseGuid;
 
             var importingModule = 0 != (manifestProcessingFlags & ManifestProcessingFlags.LoadElements);
-
+            string extension = Path.GetExtension(moduleSpecification.Name);
             // First check for fully-qualified paths - either absolute or relative
             string rootedPath = ResolveRootedFilePath(moduleSpecification.Name, this.Context);
             if (String.IsNullOrEmpty(rootedPath))
             {
-                rootedPath = Path.Combine(moduleBase, moduleSpecification.Name);
+                rootedPath = FixupFileName(moduleBase, moduleSpecification.Name, extension);
             }
             else
             {
                 wasRooted = true;
             }
 
-            string extension = Path.GetExtension(moduleSpecification.Name);
             try
             {
                 this.Context.Modules.IncrementModuleNestingDepth(this, rootedPath);
@@ -2776,37 +2768,57 @@ namespace Microsoft.PowerShell.Commands
 
             if (scriptsToProcess != null)
             {
-                foreach (string scriptFile in scriptsToProcess)
+                Version savedBaseMinimumVersion = BaseMinimumVersion;
+                Version savedBaseMaximumVersion = BaseMaximumVersion;
+                Version savedBaseRequiredVersion = BaseRequiredVersion;
+                Guid? savedBaseGuid = BaseGuid;
+
+                try
                 {
-                    bool found = false;
-                    PSModuleInfo module = LoadModule(scriptFile,
-                        moduleBase,
-                        string.Empty, // prefix (-Prefix shouldn't be applied to dot sourced scripts)
-                        null,
-                        ref options,
-                        manifestProcessingFlags,
-                        out found);
+                    BaseMinimumVersion = null;
+                    BaseMaximumVersion = null;
+                    BaseRequiredVersion = null;
+                    BaseGuid = null;
 
-                    // If we're in analysis, add the detected exports to this module's
-                    // exports
-                    if (found && (ss == null))
+                    foreach (string scriptFile in scriptsToProcess)
                     {
-                        foreach (string detectedCmdlet in module.ExportedCmdlets.Keys)
-                        {
-                            manifestInfo.AddDetectedCmdletExport(detectedCmdlet);
-                        }
+                        bool found = false;
+                        PSModuleInfo module = LoadModule(scriptFile,
+                            moduleBase,
+                            string.Empty, // prefix (-Prefix shouldn't be applied to dot sourced scripts)
+                            null,
+                            ref options,
+                            manifestProcessingFlags,
+                            out found);
 
-                        foreach (string detectedFunction in module.ExportedFunctions.Keys)
+                        // If we're in analysis, add the detected exports to this module's
+                        // exports
+                        if (found && (ss == null))
                         {
-                            manifestInfo.AddDetectedFunctionExport(detectedFunction);
-                        }
+                            foreach (string detectedCmdlet in module.ExportedCmdlets.Keys)
+                            {
+                                manifestInfo.AddDetectedCmdletExport(detectedCmdlet);
+                            }
 
-                        foreach (string detectedAlias in module.ExportedAliases.Keys)
-                        {
-                            manifestInfo.AddDetectedAliasExport(detectedAlias,
-                                module.ExportedAliases[detectedAlias].Definition);
+                            foreach (string detectedFunction in module.ExportedFunctions.Keys)
+                            {
+                                manifestInfo.AddDetectedFunctionExport(detectedFunction);
+                            }
+
+                            foreach (string detectedAlias in module.ExportedAliases.Keys)
+                            {
+                                manifestInfo.AddDetectedAliasExport(detectedAlias,
+                                    module.ExportedAliases[detectedAlias].Definition);
+                            }
                         }
                     }
+                }
+                finally
+                {
+                    BaseMinimumVersion = savedBaseMinimumVersion;
+                    BaseMaximumVersion = savedBaseMaximumVersion;
+                    BaseRequiredVersion = savedBaseRequiredVersion;
+                    BaseGuid = savedBaseGuid;
                 }
             }
 
@@ -4112,9 +4124,13 @@ namespace Microsoft.PowerShell.Commands
                     {
                         requiredModules.Add(new ModuleSpecification(currentModule), new List<ModuleSpecification> { requiredModuleSpecification });
                     }
+                    if (requiredModuleSpecification != null)
+                    {
+                        requiredModules.Add(requiredModuleSpecification, new List<ModuleSpecification>(requiredModuleInfo.RequiredModulesSpecification));
+                    }
 
                     // We always need to check against the module name and not the file name
-                    hasRequiredModulesCyclicReference = HasRequiredModulesCyclicReference(requiredModuleInfo.Name,
+                    hasRequiredModulesCyclicReference = HasRequiredModulesCyclicReference(requiredModuleSpecification,
                                                                                           new List<ModuleSpecification>(requiredModuleInfo.RequiredModulesSpecification),
                                                                                           new Collection<PSModuleInfo> { requiredModuleInfo },
                                                                                           requiredModules,
@@ -4433,15 +4449,15 @@ namespace Microsoft.PowerShell.Commands
             return result;
         }
 
-        private static bool HasRequiredModulesCyclicReference(string currentModuleName, List<ModuleSpecification> requiredModules, IEnumerable<PSModuleInfo> moduleInfoList, Dictionary<ModuleSpecification, List<ModuleSpecification>> nonCyclicRequiredModules, out ErrorRecord error)
+        private static bool HasRequiredModulesCyclicReference(ModuleSpecification currentModuleSpecification, List<ModuleSpecification> requiredModules, IEnumerable<PSModuleInfo> moduleInfoList, Dictionary<ModuleSpecification, List<ModuleSpecification>> nonCyclicRequiredModules, out ErrorRecord error)
         {
             error = null;
-            if (requiredModules == null || requiredModules.Count == 0)
+            if (requiredModules == null || requiredModules.Count == 0 || currentModuleSpecification == null)
             {
                 return false;
             }
 
-            foreach (var moduleSpecification in requiredModules)
+            foreach (var requiredModuleSpecification in requiredModules)
             {
                 // The dictionary holds the key-value pair with the following convention
                 // Key --> Module
@@ -4454,56 +4470,47 @@ namespace Microsoft.PowerShell.Commands
 
                 // Cycle
                 // 1 --->2---->3---->4---> 2
-                if (nonCyclicRequiredModules.ContainsKey(moduleSpecification))
+                if (nonCyclicRequiredModules.ContainsKey(requiredModuleSpecification))
                 {
                     // Error out saying there is a cyclic reference
                     PSModuleInfo mo = null;
                     foreach (var i in moduleInfoList)
                     {
-                        if (i.Name.Equals(currentModuleName, StringComparison.OrdinalIgnoreCase))
+                        if (i.Name.Equals(currentModuleSpecification.Name, StringComparison.OrdinalIgnoreCase))
                         {
                             mo = i;
                             break;
                         }
                     }
                     Dbg.Assert(mo != null, "The moduleInfo should be present");
-                    string message = StringUtil.Format(Modules.RequiredModulesCyclicDependency, currentModuleName, moduleSpecification.Name, mo.Path);
+                    string message = StringUtil.Format(Modules.RequiredModulesCyclicDependency, currentModuleSpecification.ToString(), requiredModuleSpecification.ToString(), mo.Path);
                     MissingMemberException mm = new MissingMemberException(message);
                     error = new ErrorRecord(mm, "Modules_InvalidManifest", ErrorCategory.ResourceUnavailable, mo.Path);
                     return true;
                 }
-                else // Go for the recursive check for the RequiredModules of current module
+                else // Go for recursive check for the RequiredModules of current requiredModuleSpecification
                 {
-                    // Add required Modules of m to the list
-                    Collection<PSModuleInfo> availableModules = GetModuleIfAvailable(moduleSpecification);
-                    List<ModuleSpecification> list = new List<ModuleSpecification>();
-                    string moduleName = null;
+                    Collection<PSModuleInfo> availableModules = GetModuleIfAvailable(requiredModuleSpecification);
                     if (availableModules.Count == 1)
                     {
-                        moduleName = availableModules[0].Name;
-                        foreach (var rm in availableModules[0].RequiredModulesSpecification)
-                        {
-                            list.Add(rm);
-                        }
-                        // Only add if this element has a required module (meaning, it could lead to a circular reference)
+                        List<ModuleSpecification> list = new List<ModuleSpecification>(availableModules[0].RequiredModulesSpecification);
+                        // Only add if this required module has nested required modules (meaning, it could lead to a circular reference)
                         if (list.Count > 0)
                         {
-                            nonCyclicRequiredModules.Add(moduleSpecification, list);
+                            nonCyclicRequiredModules.Add(requiredModuleSpecification, list);
+                            // We always need to check against the module specification and not the file name
+                            if (HasRequiredModulesCyclicReference(requiredModuleSpecification, list, availableModules, nonCyclicRequiredModules, out error))
+                            {
+                                return true;
+                            }
                         }
-                    }
-
-                    // We always need to check against the module name and not the file name
-                    if (HasRequiredModulesCyclicReference(moduleName, list, availableModules, nonCyclicRequiredModules, out error))
-                    {
-                        return true;
                     }
                 }
             }
 
-            // Once depth recursive returns a value, we should remove the current module from the CyclicRequiredModules check list.
-            // This prevent non related modules get involved in the cycle list.
-            ModuleSpecification currentModule = new ModuleSpecification(currentModuleName);
-            nonCyclicRequiredModules.Remove(currentModule);
+            // Once nested recursive calls are complete, we should remove the current module from the nonCyclicRequiredModules check list.
+            // This prevents non related modules from getting involved in the cycle list.
+            nonCyclicRequiredModules.Remove(currentModuleSpecification); // this uses ModuleSpecificationComparer equality comparer
             return false;
         }
 
@@ -4672,7 +4679,7 @@ namespace Microsoft.PowerShell.Commands
 
             if (listOfStrings != null)
             {
-                var psHome = Utils.GetApplicationBase(Utils.DefaultPowerShellShellID);
+                var psHome = Utils.DefaultPowerShellAppBase;
                 string alternateDirToCheck = null;
                 if (moduleBase.StartsWith(psHome, StringComparison.OrdinalIgnoreCase))
                 {
@@ -6836,6 +6843,15 @@ namespace Microsoft.PowerShell.Commands
 
                 assemblyVersion = GetAssemblyVersionNumber(assemblyToLoad);
                 assembly = assemblyToLoad;
+                // If this is an in-memory only assembly, add it directly to the assembly cache if
+                // it isn't already there.
+                if (string.IsNullOrEmpty(assembly.Location))
+                {
+                    if (! Context.AssemblyCache.ContainsKey(assembly.FullName))
+                    {
+                        Context.AssemblyCache.Add(assembly.FullName, assembly);
+                    }
+                }
             }
             else
             {
@@ -7189,7 +7205,6 @@ namespace Microsoft.PowerShell.Commands
             {
                 AddModuleToModuleTables(this.Context, this.TargetSessionState.Internal, module);
             }
-
             return module;
         }
 

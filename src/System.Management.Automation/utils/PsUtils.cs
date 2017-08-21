@@ -15,10 +15,6 @@ using System.Xml;
 using Microsoft.Win32;
 using System.Collections.Generic;
 using System.Management.Automation.Language;
-#if CORECLR
-// Use stubs for SerializableAttribute, SecurityPermissionAttribute, ReliabilityContractAttribute and ISerializable related types.
-using Microsoft.PowerShell.CoreClr.Stubs;
-#endif
 
 namespace System.Management.Automation
 {
@@ -90,52 +86,42 @@ namespace System.Management.Automation
             return mainModule;
         }
 
+        // Cache of the current process' parentId
+        private static int? s_currentParentProcessId;
+        private static readonly int s_currentProcessId = Process.GetCurrentProcess().Id;
+
         /// <summary>
         /// Retrieve the parent process of a process.
         ///
         /// Previously this code used WMI, but WMI is causing a CPU spike whenever the query gets called as it results in
-        /// tzres.dll and tzres.mui.dll being loaded into every process to conver the time information to local format.
-        /// For perf reasons, we result to P/Invoke.
+        /// tzres.dll and tzres.mui.dll being loaded into every process to convert the time information to local format.
+        /// For perf reasons, we resort to P/Invoke.
         /// </summary>
         ///
         /// <param name="current">The process we want to find the
         /// parent of</param>
         internal static Process GetParentProcess(Process current)
         {
-            int parentPid = 0;
+            var processId = current.Id;
 
-#if !UNIX
-            PlatformInvokes.PROCESSENTRY32 pe32 = new PlatformInvokes.PROCESSENTRY32 { };
-            pe32.dwSize = (uint)ClrFacade.SizeOf<PlatformInvokes.PROCESSENTRY32>();
+            // This is a common query (parent id for the current process)
+            // Use cached value if available
+            var parentProcessId = processId == s_currentProcessId && s_currentParentProcessId.HasValue ?
+                 s_currentParentProcessId.Value :
+                 Microsoft.PowerShell.ProcessCodeMethods.GetParentPid(current);
 
-            using (PlatformInvokes.SafeSnapshotHandle hSnapshot = PlatformInvokes.CreateToolhelp32Snapshot(PlatformInvokes.SnapshotFlags.Process, (uint)current.Id))
+            // cache the current process parent pid if it hasn't been done yet
+            if (processId == s_currentProcessId && !s_currentParentProcessId.HasValue)
             {
-                if (!PlatformInvokes.Process32First(hSnapshot, ref pe32))
-                {
-                    int errno = Marshal.GetLastWin32Error();
-                    if (errno == PlatformInvokes.ERROR_NO_MORE_FILES)
-                    {
-                        return null;
-                    }
-                }
-                do
-                {
-                    if (pe32.th32ProcessID == (uint)current.Id)
-                    {
-                        parentPid = (int)pe32.th32ParentProcessID;
-                        break;
-                    }
-
-                } while (PlatformInvokes.Process32Next(hSnapshot, ref pe32));
+                s_currentParentProcessId = parentProcessId;
             }
-#endif
 
-            if (parentPid == 0)
+            if (parentProcessId == 0)
                 return null;
 
             try
             {
-                Process returnProcess = Process.GetProcessById(parentPid);
+                Process returnProcess = Process.GetProcessById(parentProcessId);
 
                 // Ensure the process started before the current
                 // process, as it could have gone away and had the
@@ -153,394 +139,6 @@ namespace System.Management.Automation
                 return null;
             }
         }
-
-#if !CORECLR // .NET Framework Version is not applicable to CoreCLR
-        /// <summary>
-        /// Detects the installation of Framework Versions 1.1, 2.0, 3.0 and 3.5 and 4.0 through
-        /// the official registry installation keys.
-        /// </summary>
-        internal static class FrameworkRegistryInstallation
-        {
-            /// <summary>
-            /// Gets the three registry names allowing for framework installation and service pack checks based on the
-            /// majorVersion and minorVersion version numbers.
-            /// </summary>
-            /// <param name="majorVersion">Major version of .NET required, for .NET 3.5 this is 3.</param>
-            /// <param name="minorVersion">Minor version of .NET required, for .NET 3.5 this is 5.</param>
-            /// <param name="installKeyName">name of the key containing installValueName</param>
-            /// <param name="installValueName">name of the registry key indicating the SP has been installed</param>
-            /// <param name="spKeyName">name of the key containing the SP value with SP version</param>
-            /// <param name="spValueName">name of the value containing the SP value with SP version</param>
-            /// <returns>true if the majorVersion and minorVersion correspond the versions we can check for, false otherwise.</returns>
-            private static bool GetRegistryNames(int majorVersion, int minorVersion, out string installKeyName, out string installValueName, out string spKeyName, out string spValueName)
-            {
-                installKeyName = null;
-                spKeyName = null;
-                installValueName = null;
-                spValueName = "SP";
-
-
-                const string v1_1KeyName = "v1.1.4322";
-                const string v2KeyName = "v2.0.50727";
-                const string v3KeyName = "v3.0";
-                const string v3_5KeyName = "v3.5";
-
-                // There are two registry keys "Client" and "Full" corresponding to the Client and Full .NET 4 Profiles.
-                // Client is a subset of the assemblies in Full (identical assemblies, smaller set), having most of the
-                // .NET 4's features.
-                // Here is some information on the client profile: http://msdn.microsoft.com/en-us/library/cc656912.aspx
-                // For now, we are picking Client, because it has most of .NET features and is the only version available
-                // in Server Core. If, in the future, PowerShell needs to depend on Full, we might have to revisit this
-                // decision.
-                const string v4KeyName = @"v4\Client";
-                const string install = "Install";
-                const string oneToThreePointFivePrefix = @"SOFTWARE\Microsoft\NET Framework Setup\NDP\";
-
-                // In .NET 4.5, there is no concept of Client and Full. There is only the full redistributable package available
-                // http://msdn.microsoft.com/en-us/library/cc656912(VS.110).aspx
-                const string v45KeyName = @"v4\Full";
-                const string v45ReleaseKeyName = "Release";
-
-                if (majorVersion == 1 && minorVersion == 1)
-                {
-                    // http://msdn.microsoft.com/en-us/library/ms994402.aspx
-                    installKeyName = oneToThreePointFivePrefix + v1_1KeyName;
-                    spKeyName = installKeyName;
-                    installValueName = install;
-                    return true;
-                }
-                if (majorVersion == 2 && minorVersion == 0)
-                {
-                    // http://msdn.microsoft.com/en-us/library/aa480243.aspx
-                    installKeyName = oneToThreePointFivePrefix + v2KeyName;
-                    spKeyName = installKeyName;
-                    installValueName = install;
-                    return true;
-                }
-                if (majorVersion == 3 && minorVersion == 0)
-                {
-                    // http://msdn.microsoft.com/en-us/library/aa480173.aspx
-                    installKeyName = oneToThreePointFivePrefix + v3KeyName + @"\Setup";
-                    spKeyName = oneToThreePointFivePrefix + v3KeyName;
-                    installValueName = "InstallSuccess";
-                    return true;
-                }
-                if (majorVersion == 3 && minorVersion == 5)
-                {
-                    // http://msdn.microsoft.com/en-us/library/cc160716.aspx
-                    installKeyName = oneToThreePointFivePrefix + v3_5KeyName;
-                    spKeyName = installKeyName;
-                    installValueName = install;
-                    return true;
-                }
-                if (majorVersion == 4 && minorVersion == 0)
-                {
-                    // http://msdn.microsoft.com/library/ee942965(v=VS.100).aspx
-                    installKeyName = oneToThreePointFivePrefix + v4KeyName;
-                    spKeyName = installKeyName;
-                    installValueName = install;
-                    spValueName = "Servicing";
-                    return true;
-                }
-                if (majorVersion == 4 && minorVersion == 5)
-                {
-                    // http://msdn.microsoft.com/en-us/library/ee942965(VS.110).aspx
-                    installKeyName = oneToThreePointFivePrefix + v45KeyName;
-                    installValueName = v45ReleaseKeyName;
-                    return true;
-                }
-
-                // To add v1.0 in the future note that
-                // http://msdn.microsoft.com/en-us/library/ms994395.aspx does not mention
-                // NDP keys since they were not introduced until later.
-                // There were no official setup keys,  but this blog suggests an alternative for finding out
-                // about the service pack information:
-                // http://blogs.msdn.com/astebner/archive/2004/09/14/229802.aspx
-                return false;
-            }
-
-            /// <summary>
-            /// Tries to read the valueName from the registry key returning null if
-            /// the it was not found, if it is not an integer or if or an exception was thrown.
-            /// </summary>
-            /// <param name="key">Key containing valueName</param>
-            /// <param name="valueName">Name of value to be returned</param>
-            /// <returns>The value or null if it could not be retrieved</returns>
-            private static int? GetRegistryKeyValueInt(RegistryKey key, string valueName)
-            {
-                try
-                {
-                    object keyValue = key.GetValue(valueName);
-                    if (keyValue is int)
-                    {
-                        return (int)keyValue;
-                    }
-                    return null;
-                }
-                catch (ObjectDisposedException)
-                {
-                    return null;
-                }
-                catch (SecurityException)
-                {
-                    return null;
-                }
-                catch (IOException)
-                {
-                    return null;
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    return null;
-                }
-            }
-
-            /// <summary>
-            /// Tries to read the keyName from the registry key returning null if
-            /// the key was not found or an exception was thrown.
-            /// </summary>
-            /// <param name="key">Key containing subKeyName</param>
-            /// <param name="subKeyName">NAme of sub key to be returned</param>
-            /// <returns>The subkey or null if it could not be retrieved</returns>
-            private static RegistryKey GetRegistryKeySubKey(RegistryKey key, string subKeyName)
-            {
-                try
-                {
-                    return key.OpenSubKey(subKeyName);
-                }
-                catch (ObjectDisposedException)
-                {
-                    return null;
-                }
-                catch (SecurityException)
-                {
-                    return null;
-                }
-                catch (ArgumentException)
-                {
-                    return null;
-                }
-            }
-
-            // based on Table in http://support.microsoft.com/kb/318785
-            private static Version V4_0 = new Version(4, 0, 30319, 0);
-            private static Version V3_5 = new Version(3, 5, 21022, 8);
-            private static Version V3_5sp1 = new Version(3, 5, 30729, 1);
-            private static Version V3_0 = new Version(3, 0, 4506, 30);
-            private static Version V3_0sp1 = new Version(3, 0, 4506, 648);
-            private static Version V3_0sp2 = new Version(3, 0, 4506, 2152);
-            private static Version V2_0 = new Version(2, 0, 50727, 42);
-            private static Version V2_0sp1 = new Version(2, 0, 50727, 1433);
-            private static Version V2_0sp2 = new Version(2, 0, 50727, 3053);
-            private static Version V1_1 = new Version(1, 1, 4322, 573);
-            private static Version V1_1sp1 = new Version(1, 1, 4322, 2032);
-            private static Version V1_1sp1Server = new Version(1, 1, 4322, 2300);
-
-            // Original versions without build or revision numbers
-            private static Version V4_5_00 = new Version(4, 5, 0, 0);
-            private static Version V4_0_00 = new Version(4, 0, 0, 0);
-            private static Version V3_5_00 = new Version(3, 5, 0, 0);
-            private static Version V3_0_00 = new Version(3, 0, 0, 0);
-            private static Version V2_0_00 = new Version(2, 0, 0, 0);
-            private static Version V1_1_00 = new Version(1, 1, 0, 0);
-
-            // Dictionary holding compatible .NET framework versions
-            // This is used in verifying the .NET framework version for loading module manifest
-            internal static Dictionary<Version, HashSet<Version>> CompatibleNetFrameworkVersions = new Dictionary<Version, HashSet<Version>>() {
-                {V1_1_00, new HashSet<Version> {V4_5_00, V4_0_00, V3_5_00, V3_0_00, V2_0_00}},
-                {V2_0_00, new HashSet<Version> {V4_5_00, V4_0_00, V3_5_00, V3_0_00}},
-                {V3_0_00, new HashSet<Version> {V4_5_00, V4_0_00, V3_5_00 }},
-                {V3_5_00, new HashSet<Version> {V4_5_00, V4_0_00 }},
-                {V4_0_00, new HashSet<Version> {V4_5_00}},
-                {V4_5_00, new HashSet<Version> ()},
-            };
-
-            // .NET 4.5 is the highest known .NET version for PowerShell 3.0
-            internal static Version KnownHighestNetFrameworkVersion = new Version(4, 5);
-
-            /// <summary>
-            /// Returns true if IsFrameworkInstalled will be able to check for this framework version.
-            /// </summary>
-            /// <param name="version">version to be checked</param>
-            /// <param name="majorVersion">Major version of .NET required, for .NET 3.5 this is 3.</param>
-            /// <param name="minorVersion">Minor version of .NET required, for .NET 3.5 this is 5.</param>
-            /// <param name="minimumSpVersion">Minimum SP version number corresponding to <paramref name="version"/>.</param>
-            /// <returns>true if IsFrameworkInstalled will be able to check for this framework version</returns>
-            internal static bool CanCheckFrameworkInstallation(Version version, out int majorVersion, out int minorVersion, out int minimumSpVersion)
-            {
-                // based on Table in http://support.microsoft.com/kb/318785
-                majorVersion = -1;
-                minorVersion = -1;
-                minimumSpVersion = -1;
-
-                if (version == V4_5_00)
-                {
-                    majorVersion = 4;
-                    minorVersion = 5;
-                    minimumSpVersion = 0;
-                    return true;
-                }
-
-                if (version == V4_0 || version == V4_0_00)
-                {
-                    majorVersion = 4;
-                    minorVersion = 0;
-                    minimumSpVersion = 0;
-                    return true;
-                }
-                if (version == V3_5 || version == V3_5_00)
-                {
-                    majorVersion = 3;
-                    minorVersion = 5;
-                    minimumSpVersion = 0;
-                    return true;
-                }
-                if (version == V3_5sp1)
-                {
-                    majorVersion = 3;
-                    minorVersion = 5;
-                    minimumSpVersion = 1;
-                    return true;
-                }
-                else if (version == V3_0 || version == V3_0_00)
-                {
-                    majorVersion = 3;
-                    minorVersion = 0;
-                    minimumSpVersion = 0;
-                    return true;
-                }
-                else if (version == V3_0sp1)
-                {
-                    majorVersion = 3;
-                    minorVersion = 0;
-                    minimumSpVersion = 1;
-                    return true;
-                }
-                else if (version == V3_0sp2)
-                {
-                    majorVersion = 3;
-                    minorVersion = 0;
-                    minimumSpVersion = 2;
-                    return true;
-                }
-                else if (version == V2_0 || version == V2_0_00)
-                {
-                    majorVersion = 2;
-                    minorVersion = 0;
-                    minimumSpVersion = 0;
-                    return true;
-                }
-                else if (version == V2_0sp1)
-                {
-                    majorVersion = 2;
-                    minorVersion = 0;
-                    minimumSpVersion = 1;
-                    return true;
-                }
-                else if (version == V2_0sp2)
-                {
-                    majorVersion = 2;
-                    minorVersion = 0;
-                    minimumSpVersion = 2;
-                    return true;
-                }
-                else if (version == V1_1 || version == V1_1_00)
-                {
-                    majorVersion = 1;
-                    minorVersion = 1;
-                    minimumSpVersion = 0;
-                    return true;
-                }
-                else if (version == V1_1sp1 || version == V1_1sp1Server)
-                {
-                    majorVersion = 1;
-                    minorVersion = 1;
-                    minimumSpVersion = 1;
-                    return true;
-                }
-
-                return false;
-            }
-
-            /// <summary>
-            /// Check if the given version if the framework is installed
-            /// </summary>
-            /// <param name="version">version to check.
-            /// for .NET Framework 3.5 and any service pack this can be new Version(3,5) or new Version(3, 5, 21022, 8).
-            /// for .NET 3.5 with SP1 this should be new Version(3, 5, 30729, 1).
-            /// For other versions please check the table at http://support.microsoft.com/kb/318785.
-            /// </param>
-            /// <returns></returns>
-            internal static bool IsFrameworkInstalled(Version version)
-            {
-                int minorVersion, majorVersion, minimumSPVersion;
-                if (!FrameworkRegistryInstallation.CanCheckFrameworkInstallation(
-                        version,
-                        out majorVersion,
-                        out minorVersion,
-                        out minimumSPVersion))
-                {
-                    return false;
-                }
-                return IsFrameworkInstalled(majorVersion, minorVersion, minimumSPVersion);
-            }
-
-            /// <summary>
-            /// Check if the given version if the framework is installed
-            /// </summary>
-            /// <param name="majorVersion">Major version of .NET required, for .NET 3.5 this is 3.</param>
-            /// <param name="minorVersion">Minor version of .NET required, for .NET 3.5 this is 5.</param>
-            /// <param name="minimumSPVersion">Minimum SP version required. 0 (Zero) or less means no SP requirement.</param>
-            /// <returns>true if the framework is available. False if it is not available or that could not be determined.</returns>
-            internal static bool IsFrameworkInstalled(int majorVersion, int minorVersion, int minimumSPVersion)
-            {
-                string installKeyName, installValueName, spKeyName, spValueName;
-                if (!FrameworkRegistryInstallation.GetRegistryNames(majorVersion, minorVersion, out installKeyName, out installValueName, out spKeyName, out spValueName))
-                {
-                    return false;
-                }
-
-                RegistryKey installKey = FrameworkRegistryInstallation.GetRegistryKeySubKey(Registry.LocalMachine, installKeyName);
-                if (installKey == null)
-                {
-                    return false;
-                }
-
-                int? installValue = FrameworkRegistryInstallation.GetRegistryKeyValueInt(installKey, installValueName);
-                if (installValue == null)
-                {
-                    return false;
-                }
-                // The detection logic for .NET 4.5 is to check for the existence of a DWORD key named Release under HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full folder in the registry.
-                // For .NET 4.5, the value of this key is the release number and not 1 (Install = 1 for .NET 3.5, .NET 4.0) . So, we need to bypasss the check below
-                if ((majorVersion != 4 && minorVersion != 5) && (installValue != 1))
-                {
-                    Debug.Assert(PSVersionInfo.CLRVersion.Major == 4, "This check is valid only for CLR Version 4.0 and .NET Version 4.5");
-                    return false;
-                }
-
-                if (minimumSPVersion > 0)
-                {
-                    RegistryKey spKey = FrameworkRegistryInstallation.GetRegistryKeySubKey(Registry.LocalMachine, spKeyName);
-                    if (spKey == null)
-                    {
-                        return false;
-                    }
-                    int? spValue = FrameworkRegistryInstallation.GetRegistryKeyValueInt(spKey, spValueName);
-                    if (spValue == null)
-                    {
-                        return false;
-                    }
-                    if (spValue < minimumSPVersion)
-                    {
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-        }
-#endif
 
         /// <summary>
         /// Returns processor architecture for the current process.
@@ -583,25 +181,32 @@ namespace System.Management.Automation
         /// <returns></returns>
         internal static bool IsRunningOnProcessorArchitectureARM()
         {
-#if CORECLR
             Architecture arch = RuntimeInformation.OSArchitecture;
-            if (arch == Architecture.Arm || arch == Architecture.Arm64)
-            {
-                return true;
-            }
-            else
-            {
-                return false;
-            }
-#else
-            // Important:
-            // this function has a clone in Workflow.ServiceCore in admin\monad\src\m3p\product\ServiceCore\WorkflowCore\WorkflowRuntimeCompilation.cs
-            // if you are making any changes specific to this function then update the clone as well.
+            return arch == Architecture.Arm || arch == Architecture.Arm64;
+        }
 
-            var sysInfo = new NativeMethods.SYSTEM_INFO();
-            NativeMethods.GetSystemInfo(ref sysInfo);
-            return sysInfo.wProcessorArchitecture == NativeMethods.PROCESSOR_ARCHITECTURE_ARM;
-#endif
+        /// <summary>
+        /// Get a temporary directory to use, needs to be unique to avoid collision
+        /// </summary>
+        internal static string GetTemporaryDirectory()
+        {
+            string tempDir = String.Empty;
+            string tempPath = Path.GetTempPath();
+            do
+            {
+                tempDir = Path.Combine(tempPath,System.Guid.NewGuid().ToString());
+            }
+            while (Directory.Exists(tempDir));
+
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                tempDir = String.Empty; // will become current working directory
+            }
+            return tempDir;
         }
 
         internal static string GetHostName()

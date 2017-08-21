@@ -69,7 +69,7 @@ Describe "Json Tests" -Tags "Feature" {
         It "Convertto-Json should handle Enum based on Int64" {
 
             # Test follow-up for bug Win8: 378368 Convertto-Json problems with Enum based on Int64.
-            if ( ("JsonEnumTest" -as "Type") -eq $null ) {
+            if ( $null -eq ("JsonEnumTest" -as "Type")) {
                 $enum1 = "TestEnum" + (get-random)
                 $enum2 = "TestEnum" + (get-random)
                 $enum3 = "TestEnum" + (get-random)
@@ -211,6 +211,23 @@ Describe "Json Tests" -Tags "Feature" {
             $emptyStringResult = ConvertFrom-Json ""
             $emptyStringResult | Should Be $null
         }
+
+        It "Convert enumerated values to Json" {
+
+            $sampleObject = [pscustomobject]@{
+                PSTypeName = 'Test.EnumSample'
+                SampleSimpleEnum = [System.Management.Automation.ActionPreference]::Ignore
+                SampleBitwiseEnum = [System.Management.Automation.CommandTypes]'Alias,Function,Cmdlet'
+            }
+
+            $response4 = ConvertTo-Json -InputObject $sampleObject -Compress
+            $response4 | Should Be '{"SampleSimpleEnum":4,"SampleBitwiseEnum":11}'
+
+            $response4 = ConvertTo-Json -InputObject $sampleObject -Compress -EnumsAsStrings
+            $response4 | Should Be '{"SampleSimpleEnum":"Ignore","SampleBitwiseEnum":"Alias, Function, Cmdlet"}'
+
+        }
+
     }
 
     Context "JsonObject Tests" {
@@ -228,7 +245,6 @@ Describe "Json Tests" -Tags "Feature" {
 
             # add a ScriptProperty called IsOld which returns whether the version is an older version
             $versionObject | Add-Member -MemberType ScriptProperty -Name IsOld -Value { ($this.Major -le 3) }
-
             $jstr = ConvertTo-Json $versionObject
 
             # convert the JSON string to a JSON object
@@ -1393,7 +1409,7 @@ Describe "Json Bug fixes"  -Tags "Feature" {
                 Next = $null
             }
 
-            ($($testCase.NumberOfElements)-1)..$start | foreach {
+            ($($testCase.NumberOfElements)-1)..$start | ForEach-Object {
                 $current = @{
                     Depth = $_
                     Next = $previous
@@ -1454,5 +1470,26 @@ Describe "Json Bug fixes"  -Tags "Feature" {
     foreach ($testCase in $testCases)
     {
         RunJsonTest $testCase
+    }
+
+    It "ConvertFrom-Json deserializes an array of PSObjects (in multiple lines) as a single string." {
+
+        # Create an array of PSCustomObjects, and serialize it
+        $array = [pscustomobject]@{ objectName = "object1Name"; objectValue = "object1Value" },
+                 [pscustomobject]@{ objectName = "object2Name"; objectValue = "object2Value" }
+
+        # Serialize the array to a text file
+        $filePath = Join-Path $TESTDRIVE test.json
+        $array | ConvertTo-Json | Out-File $filePath -Encoding utf8
+
+        # Read the object as an array of PSObjects and deserialize it.
+        $result = Get-Content $filePath | ConvertFrom-Json
+        $result.Count | Should be 2
+    }
+
+    It "ConvertFrom-Json deserializes an array of strings (in multiple lines) as a single string." {
+
+        $result = "[1,","2,","3]" | ConvertFrom-Json
+        $result.Count | Should be 3
     }
 }

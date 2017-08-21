@@ -1,11 +1,6 @@
-$testroot = resolve-path (join-path $psscriptroot ../../..)
-$common = join-path $testroot Common
-$helperModule = join-path $common Test.Helpers.psm1
-
-Describe 'native commands lifecycle' -tags 'Feature' {
+Describe 'native commands with pipeline' -tags 'Feature' {
 
     BeforeAll {
-        Import-Module $helperModule
         $powershell = Join-Path -Path $PsHome -ChildPath "powershell"
     }
 
@@ -19,7 +14,7 @@ Describe 'native commands lifecycle' -tags 'Feature' {
 
         $ps.AddScript("& $powershell -noprofile -command '100;
             Start-Sleep -Seconds 100' |
-            %{ if (`$_ -eq 100) { 'foo'; exit; }}").BeginInvoke()
+            ForEach-Object { if (`$_ -eq 100) { 'foo'; exit; }}").BeginInvoke()
 
         # waiting 30 seconds, because powershell startup time could be long on the slow machines,
         # such as CI
@@ -28,39 +23,40 @@ Describe 'native commands lifecycle' -tags 'Feature' {
         $ps.Stop()
         $rs.ResetRunspaceState()
     }
+
+    It "native | native | native should work fine" {
+
+        if ($IsWindows) {
+            $result = @(ping.exe | findstr.exe count | findstr.exe ping)
+            $result[0] | Should Match "Usage: ping"
+        } else {
+            $result = @(ps aux | grep powershell | grep -v grep)
+            $result[0] | Should Match "powershell"
+        }
+    }
 }
 
 Describe "Native Command Processor" -tags "Feature" {
 
-    BeforeAll {
-        # Find where test/powershell is so we can find the createchildprocess command relative to it
-        $powershellTestDir = $PSScriptRoot
-        while ($powershellTestDir -notmatch 'test[\\/]powershell$') {
-            $powershellTestDir = Split-Path $powershellTestDir
-        }
-        $createchildprocess = Join-Path (Split-Path $powershellTestDir) tools/CreateChildProcess/bin/createchildprocess
-    }
-
     # If powershell receives a StopProcessing, it should kill the native process and all child processes
-
     # this test should pass and no longer Pending when #2561 is fixed
     It "Should kill native process tree" -Pending {
 
         # make sure no test processes are running
-        # on Linux, the Process class truncates the name so filter using Where-Object
-        Get-Process | Where-Object {$_.Name -like 'createchildproc*'} | Stop-Process
+        Get-Process testexe -ErrorAction SilentlyContinue | Stop-Process
 
         [int] $numToCreate = 2
 
-        $ps = [PowerShell]::Create().AddCommand($createchildprocess)
-        $ps.AddParameter($numToCreate)
+        $ps = [PowerShell]::Create().AddCommand("testexe")
+        $ps.AddArgument("-createchildprocess")
+        $ps.AddArgument($numToCreate)
         $async = $ps.BeginInvoke()
         $ps.InvocationStateInfo.State | Should Be "Running"
 
         [bool] $childrenCreated = $false
         while (-not $childrenCreated)
         {
-            $childprocesses = Get-Process | Where-Object {$_.Name -like 'createchildproc*'}
+            $childprocesses = Get-Process testexe -ErrorAction SilentlyContinue
             if ($childprocesses.count -eq $numToCreate+1)
             {
                 $childrenCreated = $true
@@ -77,7 +73,7 @@ Describe "Native Command Processor" -tags "Feature" {
                 break
             }
         }
-        $childprocesses = Get-Process | Where-Object {$_.Name -like 'createchildproc*'}
+        $childprocesses = Get-Process testexe
         $count = $childprocesses.count
         $childprocesses | Stop-Process
         $count | Should Be 0
@@ -123,5 +119,102 @@ Describe "Native Command Processor" -tags "Feature" {
             $ps.Dispose()
         }
     }
+}
 
+Describe "Open a text file with NativeCommandProcessor" -tags @("Feature", "RequireAdminOnWindows") {
+    BeforeAll {
+        if ($IsWindows) {
+            $TestFile = Join-Path -Path $TestDrive -ChildPath "TextFileTest.foo"
+        } else {
+            $TestFile = Join-Path -Path $TestDrive -ChildPath "TextFileTest.txt"
+        }
+        Set-Content -Path $TestFile -Value "Hello" -Force
+        $supportedEnvironment = $true
+
+        if ($IsLinux) {
+            $appFolder = "$HOME/.local/share/applications"
+            $supportedEnvironment = Test-Path $appFolder
+            if ($supportedEnvironment) {
+                $mimeDefault = xdg-mime query default text/plain
+                Remove-Item $HOME/nativeCommandProcessor.Success -Force -ErrorAction SilentlyContinue
+                Set-Content -Path "$appFolder/nativeCommandProcessor.desktop" -Force -Value @"
+[Desktop Entry]
+Version=1.0
+Name=nativeCommandProcessor
+Comment=Validate_native_command_processor_open_text_file
+Exec=/bin/sh -c 'echo %u > ~/nativeCommandProcessor.Success'
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=Application;
+"@
+                xdg-mime default nativeCommandProcessor.desktop text/plain
+            }
+        }
+        elseif ($IsWindows) {
+            $supportedEnvironment = [System.Management.Automation.Platform]::IsWindowsDesktop
+            if ($supportedEnvironment) {
+                cmd /c assoc .foo=foofile
+                cmd /c ftype foofile=cmd /c echo %1^> $TestDrive\foo.txt
+                Remove-Item $TestDrive\foo.txt -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    AfterAll {
+        Remove-Item -Path $TestFile -Force -ErrorAction SilentlyContinue
+
+        if ($IsLinux -and $supportedEnvironment) {
+            xdg-mime default $mimeDefault text/plain
+            Remove-Item $appFolder/nativeCommandProcessor.desktop -Force -ErrorAction SilentlyContinue
+            Remove-Item $HOME/nativeCommandProcessor.Success -Force -ErrorAction SilentlyContinue
+        }
+        elseif ($IsWindows -and $supportedEnvironment) {
+            cmd /c assoc .foo=
+            cmd /c ftype foofile=
+        }
+    }
+
+    It "Should open text file without error" -Skip:(!$supportedEnvironment) {
+        if ($IsOSX) {
+            $expectedTitle = Split-Path $TestFile -Leaf
+            open -F -a TextEdit
+            $beforeCount = [int]('tell application "TextEdit" to count of windows' | osascript)
+            & $TestFile
+            $startTime = Get-Date
+            $title = [String]::Empty
+            while (((Get-Date) - $startTime).TotalSeconds -lt 30 -and ($title -ne $expectedTitle)) {
+                Start-Sleep -Milliseconds 100
+                $title = 'tell application "TextEdit" to get name of front window' | osascript
+            }
+            $afterCount = [int]('tell application "TextEdit" to count of windows' | osascript)
+            $afterCount | Should Be ($beforeCount + 1)
+            $title | Should Be $expectedTitle
+            "tell application ""TextEdit"" to close window ""$expectedTitle""" | osascript
+            'tell application "TextEdit" to quit' | osascript
+        }
+        elseif ($IsLinux) {
+            # Validate on Linux by reassociating default app for text file
+            & $TestFile
+            $startTime = Get-Date
+            # It may take time for handler to start
+            while (((Get-Date) - $startTime).TotalSeconds -lt 10 -and (-not (Test-Path "$HOME/nativeCommandProcessor.Success"))) {
+                Start-Sleep -Milliseconds 100
+            }
+            Get-Content $HOME/nativeCommandProcessor.Success | Should Be $TestFile
+        }
+        else {
+            & $TestFile
+            $startTime = Get-Date
+            while (((Get-Date) - $startTime).TotalSeconds -lt 10 -and (!(Test-Path $TestDrive\foo.txt))) {
+                Start-Sleep -Milliseconds 100
+            }
+            "$TestDrive\foo.txt" | Should Exist
+            Get-Content $TestDrive\foo.txt | Should BeExactly $TestFile
+        }
+    }
+
+    It "Opening a file with an unregistered extension on Windows should fail" -Skip:(!$IsWindows) {
+        { $dllFile = "$PSHOME\System.Management.Automation.dll"; & $dllFile } | ShouldBeErrorId "NativeCommandFailed"
+    }
 }

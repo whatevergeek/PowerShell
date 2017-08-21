@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Diagnostics; // Process class
 using System.ComponentModel; // Win32Exception
+using System.Runtime.ConstrainedExecution;
 using System.Runtime.Serialization;
 using System.Threading;
 using System.Management.Automation;
@@ -17,6 +18,7 @@ using System.Net;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Security;
+using System.Security.Permissions;
 using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 using System.Management.Automation.Internal;
@@ -25,15 +27,6 @@ using Microsoft.Management.Infrastructure;
 
 using FileNakedHandle = System.IntPtr;
 using DWORD = System.UInt32;
-
-#if CORECLR
-// Use stubs for SafeHandleZeroOrMinusOneIsInvalid and SerializableAttribute
-using Microsoft.PowerShell.CoreClr.Stubs;
-using Environment = System.Management.Automation.Environment;
-#else
-using System.Runtime.ConstrainedExecution;
-using System.Security.Permissions;
-#endif
 
 namespace Microsoft.PowerShell.Commands
 {
@@ -648,7 +641,7 @@ namespace Microsoft.PowerShell.Commands
                         {
                             //assigning to tempmodule to rethrow for exceptions on 64 bit machines
                             tempmodule = pmodule;
-                            WriteObject(ClrFacade.GetProcessModuleFileVersionInfo(pmodule), true);
+                            WriteObject(pmodule.FileVersionInfo, true);
                         }
                     }
                     catch (InvalidOperationException exception)
@@ -665,7 +658,7 @@ namespace Microsoft.PowerShell.Commands
                         {
                             if (exception.HResult == 299)
                             {
-                                WriteObject(ClrFacade.GetProcessModuleFileVersionInfo(tempmodule), true);
+                                WriteObject(tempmodule.FileVersionInfo, true);
                             }
                             else
                             {
@@ -684,7 +677,7 @@ namespace Microsoft.PowerShell.Commands
                 }
                 else if (Module.IsPresent)
                 {
-                    //if only modules are to be displayed 
+                    //if only modules are to be displayed
                     try
                     {
                         WriteObject(process.Modules, true);
@@ -717,7 +710,7 @@ namespace Microsoft.PowerShell.Commands
                     //if fileversion of each process is to be displayed
                     try
                     {
-                        WriteObject(ClrFacade.GetProcessModuleFileVersionInfo(PsUtils.GetMainModule(process)), true);
+                        WriteObject(PsUtils.GetMainModule(process).FileVersionInfo, true);
                     }
                     catch (InvalidOperationException exception)
                     {
@@ -733,7 +726,7 @@ namespace Microsoft.PowerShell.Commands
                         {
                             if (exception.HResult == 299)
                             {
-                                WriteObject(ClrFacade.GetProcessModuleFileVersionInfo(PsUtils.GetMainModule(process)), true);
+                                WriteObject(PsUtils.GetMainModule(process).FileVersionInfo, true);
                             }
                             else
                             {
@@ -752,13 +745,143 @@ namespace Microsoft.PowerShell.Commands
                 }
                 else
                 {
-                    WriteObject(ClrFacade.AddProcessProperties(IncludeUserName.IsPresent, process));
+                    WriteObject(IncludeUserName.IsPresent ? AddUserNameToProcess(process) : (object)process);
                 }
             }//for loop
         } // ProcessRecord
 
         #endregion Overrides
 
+        #region Privates
+
+        /// <summary>
+        /// New PSTypeName added to the process object
+        /// </summary>
+        private const string TypeNameForProcessWithUserName = "System.Diagnostics.Process#IncludeUserName";
+
+        /// <summary>
+        /// Add the 'UserName' NoteProperty to the Process object
+        /// </summary>
+        /// <param name="process"></param>
+        /// <returns></returns>
+        private static PSObject AddUserNameToProcess(Process process)
+        {
+            // Return null if we failed to get the owner information
+            string userName = RetrieveProcessUserName(process);
+
+            PSObject processAsPsobj = PSObject.AsPSObject(process);
+            PSNoteProperty noteProperty = new PSNoteProperty("UserName", userName);
+
+            processAsPsobj.Properties.Add(noteProperty, true);
+            processAsPsobj.TypeNames.Insert(0, TypeNameForProcessWithUserName);
+
+            return processAsPsobj;
+        }
+
+
+        /// <summary>
+        /// Retrieve the UserName through PInvoke
+        /// </summary>
+        /// <param name="process"></param>
+        /// <returns></returns>
+        private static string RetrieveProcessUserName(Process process)
+        {
+            string userName = null;
+#if UNIX
+            userName = Platform.NonWindowsGetUserFromPid(process.Id);
+#else
+            IntPtr tokenUserInfo = IntPtr.Zero;
+            IntPtr processTokenHandler = IntPtr.Zero;
+
+            const uint TOKEN_QUERY = 0x0008;
+
+            try
+            {
+                do
+                {
+                    int error;
+                    if (!Win32Native.OpenProcessToken(process.Handle, TOKEN_QUERY, out processTokenHandler)) { break; }
+
+                    // Set the default length to be 256, so it will be sufficient for most cases
+                    int tokenInfoLength = 256;
+                    tokenUserInfo = Marshal.AllocHGlobal(tokenInfoLength);
+                    if (!Win32Native.GetTokenInformation(processTokenHandler, Win32Native.TOKEN_INFORMATION_CLASS.TokenUser, tokenUserInfo, tokenInfoLength, out tokenInfoLength))
+                    {
+                        error = Marshal.GetLastWin32Error();
+                        if (error == Win32Native.ERROR_INSUFFICIENT_BUFFER)
+                        {
+                            Marshal.FreeHGlobal(tokenUserInfo);
+                            tokenUserInfo = Marshal.AllocHGlobal(tokenInfoLength);
+
+                            if (!Win32Native.GetTokenInformation(processTokenHandler, Win32Native.TOKEN_INFORMATION_CLASS.TokenUser, tokenUserInfo, tokenInfoLength, out tokenInfoLength)) { break; }
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+
+                    var tokenUser = Marshal.PtrToStructure<Win32Native.TOKEN_USER>(tokenUserInfo);
+
+                    // Set the default length to be 256, so it will be sufficient for most cases
+                    int userNameLength = 256, domainNameLength = 256;
+                    var userNameStr = new StringBuilder(userNameLength);
+                    var domainNameStr = new StringBuilder(domainNameLength);
+                    Win32Native.SID_NAME_USE accountType;
+
+                    if (!Win32Native.LookupAccountSid(null, tokenUser.User.Sid, userNameStr, ref userNameLength, domainNameStr, ref domainNameLength, out accountType))
+                    {
+                        error = Marshal.GetLastWin32Error();
+                        if (error == Win32Native.ERROR_INSUFFICIENT_BUFFER)
+                        {
+                            userNameStr.EnsureCapacity(userNameLength);
+                            domainNameStr.EnsureCapacity(domainNameLength);
+
+                            if (!Win32Native.LookupAccountSid(null, tokenUser.User.Sid, userNameStr, ref userNameLength, domainNameStr, ref domainNameLength, out accountType)) { break; }
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+
+                    userName = domainNameStr + "\\" + userNameStr;
+                } while (false);
+            }
+            catch (NotSupportedException)
+            {
+                // The Process not started yet, or it's a process from a remote machine
+            }
+            catch (InvalidOperationException)
+            {
+                // The Process has exited, Process.Handle will raise this exception
+            }
+            catch (Win32Exception)
+            {
+                // We might get an AccessDenied error
+            }
+            catch (Exception)
+            {
+                // I don't expect to get other exceptions,
+            }
+            finally
+            {
+                if (tokenUserInfo != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(tokenUserInfo);
+                }
+
+                if (processTokenHandler != IntPtr.Zero)
+                {
+                    Win32Native.CloseHandle(processTokenHandler);
+                }
+            }
+
+#endif
+            return userName;
+        }
+
+        #endregion Privates
     }//GetProcessCommand
     #endregion GetProcessCommand
 
@@ -1073,7 +1196,7 @@ namespace Microsoft.PowerShell.Commands
 
 
         //Addition by v-ramch Mar 18 2008
-        //Added force parameter 
+        //Added force parameter
         /// <summary>
         /// Specifies whether to force a process to kill
         /// even if it has dependent services.
@@ -1112,7 +1235,7 @@ namespace Microsoft.PowerShell.Commands
 
                 try
                 {
-                    // Many properties including Name are not available if the process has exited.  
+                    // Many properties including Name are not available if the process has exited.
                     // If this is the case, we skip the process. If the process is from a remote
                     // machine, then we generate a non-terminating error because .NET doesn't support
                     // terminate a remote process.
@@ -1247,7 +1370,7 @@ namespace Microsoft.PowerShell.Commands
             IntPtr ph = IntPtr.Zero;
             try
             {
-                if (Win32Native.OpenProcessToken(ClrFacade.GetSafeProcessHandle(process), TOKEN_QUERY, out ph))
+                if (Win32Native.OpenProcessToken(process.Handle, TOKEN_QUERY, out ph))
                 {
                     if (_currentUserName == null)
                     {
@@ -1300,7 +1423,7 @@ namespace Microsoft.PowerShell.Commands
                         string serviceName = oService.CimInstanceProperties["Name"].Value.ToString();
                         using (var service = new System.ServiceProcess.ServiceController(serviceName))
                         {
-                            //try stopping the service, if cant we are not writing exception 
+                            //try stopping the service, if cant we are not writing exception
                             try
                             {
                                 service.Stop();
@@ -1542,18 +1665,6 @@ namespace Microsoft.PowerShell.Commands
         private ManualResetEvent _waithandle = null;
         private bool _isDefaultSetParameterSpecified = false;
 
-        private bool _useShellExecute;
-        private readonly bool _isOnFullWinSku;
-
-        /// <summary>
-        /// Constructor
-        /// </summary>
-        public StartProcessCommand()
-        {
-            _isOnFullWinSku = Platform.IsWindows && !Platform.IsNanoServer && !Platform.IsIoT;
-            _useShellExecute = _isOnFullWinSku;
-        }
-
         #region Parameters
 
         /// <summary>
@@ -1659,7 +1770,7 @@ namespace Microsoft.PowerShell.Commands
 
 
         /// <summary>
-        /// Redirect input 
+        /// Redirect input
         /// </summary>
         [Parameter(ParameterSetName = "Default")]
         [Alias("RSI")]
@@ -1677,7 +1788,7 @@ namespace Microsoft.PowerShell.Commands
 
 
         /// <summary>
-        /// Redirect output 
+        /// Redirect output
         /// </summary>
         [Parameter(ParameterSetName = "Default")]
         [Alias("RSO")]
@@ -1697,7 +1808,7 @@ namespace Microsoft.PowerShell.Commands
         /// Verb
         /// </summary>
         /// <remarks>
-        /// The 'Verb' parameter is not supported in OneCore PowerShell 
+        /// The 'Verb' parameter is not supported in OneCore PowerShell
         /// because 'UseShellExecute' is not supported in CoreCLR.
         /// </remarks>
         [Parameter(ParameterSetName = "UseShellExecute")]
@@ -1754,7 +1865,7 @@ namespace Microsoft.PowerShell.Commands
             string message = string.Empty;
 
             // -Verb and -WindowStyle are not supported on non-Windows platforms as well as Windows headless SKUs
-            if (_isOnFullWinSku)
+            if (Platform.IsWindowsDesktop)
             {
                 // Parameters '-NoNewWindow' and '-WindowStyle' are both valid on full windows SKUs.
                 if (_nonewwindow && _windowstyleSpecified)
@@ -1785,6 +1896,8 @@ namespace Microsoft.PowerShell.Commands
 
             //create an instance of the ProcessStartInfo Class
             ProcessStartInfo startInfo = new ProcessStartInfo();
+            //use ShellExecute by default if we are running on full windows SKUs
+            startInfo.UseShellExecute = Platform.IsWindowsDesktop;
 
             //Path = Mandatory parameter -> Will not be empty.
             try
@@ -1836,21 +1949,20 @@ namespace Microsoft.PowerShell.Commands
             {
                 if (_isDefaultSetParameterSpecified)
                 {
-                    _useShellExecute = false;
                     startInfo.UseShellExecute = false;
                 }
 
                 //UseNewEnvironment
                 if (_UseNewEnvironment)
                 {
-                    ClrFacade.GetProcessEnvironment(startInfo).Clear();
+                    startInfo.EnvironmentVariables.Clear();
                     LoadEnvironmentVariable(startInfo, Environment.GetEnvironmentVariables(EnvironmentVariableTarget.Machine));
                     LoadEnvironmentVariable(startInfo, Environment.GetEnvironmentVariables(EnvironmentVariableTarget.User));
                 }
-#if !CORECLR
+
                 //WindowStyle
                 startInfo.WindowStyle = _windowstyle;
-#endif
+
                 //NewWindow
                 if (_nonewwindow)
                 {
@@ -1873,11 +1985,7 @@ namespace Microsoft.PowerShell.Commands
                     {
                         startInfo.Domain = nwcredential.Domain;
                     }
-#if CORECLR
-                    startInfo.PasswordInClearText = ClrFacade.ConvertSecureStringToString(_credential.Password);
-#else
                     startInfo.Password = _credential.Password;
-#endif
                 }
 
                 //RedirectionInput File Check -> Not Exist -> Throw Error
@@ -1935,7 +2043,6 @@ namespace Microsoft.PowerShell.Commands
                     }
                 }
             }
-#if !CORECLR // Properties 'Verb' and 'WindowStyle' are missing in CoreCLR
             else if (ParameterSetName.Equals("UseShellExecute"))
             {
                 //Verb
@@ -1943,7 +2050,7 @@ namespace Microsoft.PowerShell.Commands
                 //WindowStyle
                 startInfo.WindowStyle = _windowstyle;
             }
-#endif
+
             //Starts the Process
             Process process = Start(startInfo);
 
@@ -2036,7 +2143,7 @@ namespace Microsoft.PowerShell.Commands
         #region Private Methods
 
         /// <summary>
-        /// When Process exits the wait handle is set. 
+        /// When Process exits the wait handle is set.
         /// </summary>
         private void myProcess_Exited(object sender, System.EventArgs e)
         {
@@ -2054,7 +2161,7 @@ namespace Microsoft.PowerShell.Commands
 
         private void LoadEnvironmentVariable(ProcessStartInfo startinfo, IDictionary EnvironmentVariables)
         {
-            var processEnvironment = ClrFacade.GetProcessEnvironment(startinfo);
+            var processEnvironment = startinfo.EnvironmentVariables;
             foreach (DictionaryEntry entry in EnvironmentVariables)
             {
                 if (processEnvironment.ContainsKey(entry.Key.ToString()))
@@ -2093,7 +2200,7 @@ namespace Microsoft.PowerShell.Commands
             return process;
 #else
             Process process = null;
-            if (_useShellExecute)
+            if (startInfo.UseShellExecute)
             {
                 process = StartWithShellExecute(startInfo);
             }
@@ -2254,12 +2361,7 @@ namespace Microsoft.PowerShell.Commands
             return builder;
         }
 
-        private static byte[] ConvertEnvVarsToByteArray(
-#if CORECLR
-            IDictionary<string, string> sd)
-#else
-            StringDictionary sd)
-#endif
+        private static byte[] ConvertEnvVarsToByteArray(StringDictionary sd)
         {
             string[] array = new string[sd.Count];
             byte[] bytes = null;
@@ -2335,7 +2437,7 @@ namespace Microsoft.PowerShell.Commands
                 {
                     lpStartupInfo.hStdError = new SafeFileHandle(ProcessNativeMethods.GetStdHandle(-12), false);
                 }
-                //STARTF_USESTDHANDLES 
+                //STARTF_USESTDHANDLES
                 lpStartupInfo.dwFlags = 0x100;
 
                 int creationFlags = 0;
@@ -2353,7 +2455,7 @@ namespace Microsoft.PowerShell.Commands
                     lpStartupInfo.dwFlags |= 0x00000001;
 
                     // On headless SKUs like NanoServer and IoT, window style can only be the default value 'Normal'.
-                    switch (WindowStyle)
+                    switch (startinfo.WindowStyle)
                     {
                         case ProcessWindowStyle.Normal:
                             //SW_SHOWNORMAL
@@ -2378,7 +2480,7 @@ namespace Microsoft.PowerShell.Commands
                 creationFlags |= 0x00000004;
 
                 IntPtr AddressOfEnvironmentBlock = IntPtr.Zero;
-                var environmentVars = ClrFacade.GetProcessEnvironment(startinfo);
+                var environmentVars = startinfo.EnvironmentVariables;
                 if (environmentVars != null)
                 {
                     if (this.UseNewEnvironment)
@@ -2402,11 +2504,7 @@ namespace Microsoft.PowerShell.Commands
                     IntPtr password = IntPtr.Zero;
                     try
                     {
-#if CORECLR
-                        password = (startinfo.PasswordInClearText == null) ? Marshal.StringToCoTaskMemUni(string.Empty) : Marshal.StringToCoTaskMemUni(startinfo.PasswordInClearText);
-#else
-                        password = (startinfo.Password == null) ? Marshal.StringToCoTaskMemUni(string.Empty) : ClrFacade.SecureStringToCoTaskMemUnicode(startinfo.Password);
-#endif
+                        password = (startinfo.Password == null) ? Marshal.StringToCoTaskMemUni(string.Empty) : Marshal.SecureStringToCoTaskMemUnicode(startinfo.Password);
                         flag = ProcessNativeMethods.CreateProcessWithLogonW(startinfo.UserName, startinfo.Domain, password, logonFlags, null, cmdLine, creationFlags, AddressOfEnvironmentBlock, startinfo.WorkingDirectory, lpStartupInfo, lpProcessInformation);
                         if (!flag)
                         {
@@ -2419,7 +2517,7 @@ namespace Microsoft.PowerShell.Commands
                             }
                             else if (error == 0x424)
                             {
-                                // The API 'CreateProcessWithLogonW' depends on the 'Secondary Logon' service, but the component 'Microsoft-Windows-SecondaryLogonService' 
+                                // The API 'CreateProcessWithLogonW' depends on the 'Secondary Logon' service, but the component 'Microsoft-Windows-SecondaryLogonService'
                                 // is not installed in OneCoreUAP. We will get error code 0x424 when the service is not available.
                                 message = StringUtil.Format(ProcessResources.ParameterNotSupported, "-Credential", "Start-Process");
                                 er = new ErrorRecord(new NotSupportedException(message), "NotSupportedException", ErrorCategory.NotInstalled, null);
@@ -2485,11 +2583,7 @@ namespace Microsoft.PowerShell.Commands
             Process result = null;
             try
             {
-#if CORECLR
-                result = ShellExecuteHelper.Start(startInfo, WindowStyle, Verb);
-#else
                 result = Process.Start(startInfo);
-#endif
             }
             catch (Win32Exception ex)
             {
@@ -2497,7 +2591,7 @@ namespace Microsoft.PowerShell.Commands
                 ErrorRecord er = new ErrorRecord(new InvalidOperationException(message), "InvalidOperationException", ErrorCategory.InvalidOperation, null);
                 ThrowTerminatingError(er);
             }
-            return result; 
+            return result;
         }
 #endif
         #endregion
@@ -2511,7 +2605,7 @@ namespace Microsoft.PowerShell.Commands
     internal class ProcessCollection
     {
         /// <summary>
-        /// JobObjectHandle is a reference to the job object used to track 
+        /// JobObjectHandle is a reference to the job object used to track
         /// the child processes created by the main process hosted by the Start-Process cmdlet.
         /// </summary>
         private Microsoft.PowerShell.Commands.SafeJobHandle _jobObjectHandle;
@@ -2526,13 +2620,13 @@ namespace Microsoft.PowerShell.Commands
         }
 
         /// <summary>
-        /// Start API assigns the process to the JobObject and starts monitoring 
+        /// Start API assigns the process to the JobObject and starts monitoring
         /// the child processes hosted by the process created by Start-Process cmdlet.
         /// </summary>
         internal bool AssignProcessToJobObject(Process process)
         {
             // Add the process to the job object
-            bool result = NativeMethods.AssignProcessToJobObject(_jobObjectHandle, ClrFacade.GetRawProcessHandle(process));
+            bool result = NativeMethods.AssignProcessToJobObject(_jobObjectHandle, process.Handle);
             return result;
         }
 
@@ -2578,8 +2672,8 @@ namespace Microsoft.PowerShell.Commands
     }
 
     /// <summary>
-    /// JOBOBJECT_BASIC_PROCESS_ID_LIST Contains the process identifier list for a job object. 
-    /// If the job is nested, the process identifier list consists of all 
+    /// JOBOBJECT_BASIC_PROCESS_ID_LIST Contains the process identifier list for a job object.
+    /// If the job is nested, the process identifier list consists of all
     /// processes associated with the job and its child jobs.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
@@ -2591,14 +2685,14 @@ namespace Microsoft.PowerShell.Commands
         public uint NumberOfAssignedProcess;
 
         /// <summary>
-        /// The number of process identifiers returned in the ProcessIdList buffer. 
-        /// If this number is less than NumberOfAssignedProcesses, increase 
+        /// The number of process identifiers returned in the ProcessIdList buffer.
+        /// If this number is less than NumberOfAssignedProcesses, increase
         /// the size of the buffer to accommodate the complete list.
         /// </summary>
         public uint NumberOfProcessIdsInList;
 
         /// <summary>
-        /// A variable-length array of process identifiers returned by this call. 
+        /// A variable-length array of process identifiers returned by this call.
         /// Array elements 0 through NumberOfProcessIdsInList minus 1
         /// contain valid process identifiers.
         /// </summary>
@@ -2608,7 +2702,6 @@ namespace Microsoft.PowerShell.Commands
     internal static class ProcessNativeMethods
     {
         // Fields
-        internal static readonly IntPtr INVALID_HANDLE_VALUE = IntPtr.Zero;
         internal static UInt32 GENERIC_READ = 0x80000000;
         internal static UInt32 GENERIC_WRITE = 0x40000000;
         internal static UInt32 FILE_ATTRIBUTE_NORMAL = 0x80000000;
@@ -2822,7 +2915,7 @@ namespace Microsoft.PowerShell.Commands
         }
     }
 
-    [SuppressUnmanagedCodeSecurity, HostProtection(SecurityAction.LinkDemand, MayLeakOnAbort = true)]
+    [SuppressUnmanagedCodeSecurity]
     internal sealed class SafeJobHandle : SafeHandleZeroOrMinusOneIsInvalid
     {
         internal SafeJobHandle(IntPtr jobHandle)

@@ -7,6 +7,7 @@ using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Data;
 using System.Dynamic;
 using System.Linq;
 using System.Linq.Expressions;
@@ -23,14 +24,9 @@ using System.Runtime.Serialization;
 using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.Management.Infrastructure;
-using Dbg = System.Management.Automation.Diagnostics;
 
 #if !CORECLR
-using System.Data;
 using System.DirectoryServices;
-#else
-// Use stubs for Serializable attribute and ISerializable related types.
-using Microsoft.PowerShell.CoreClr.Stubs;
 #endif
 
 #pragma warning disable 1634, 1691 // Stops compiler from warning about unknown warnings
@@ -47,9 +43,7 @@ namespace System.Management.Automation
     /// It is permitted to subclass <see cref="PSObject"/>
     /// but there is no established scenario for doing this, nor has it been tested.
     /// </remarks>
-#if !CORECLR // TypeDescriptionProvider is not supported in CoreCLR
     [TypeDescriptionProvider(typeof(PSObjectTypeDescriptionProvider))]
-#endif
     [Serializable]
     public class PSObject : IFormattable, IComparable, ISerializable, IDynamicMetaObjectProvider
     {
@@ -387,13 +381,13 @@ namespace System.Management.Automation
                                                           new Microsoft.PowerShell.Cim.CimInstanceAdapter()),
                                     PSObject.dotNetInstanceAdapter);
 
-#if !CORECLR // WMIv1/ADSI/DataRow/DataRowView Adapters Not Supported On CSS
+#if !CORECLR // WMIv1/ADSI Adapters Not Supported in PowerShell Core
         private static readonly AdapterSet managementObjectAdapter = new AdapterSet(new ManagementObjectAdapter(), dotNetInstanceAdapter);
         private static readonly AdapterSet managementClassAdapter = new AdapterSet(new ManagementClassApdapter(), dotNetInstanceAdapter);
         private static readonly AdapterSet directoryEntryAdapter = new AdapterSet(new DirectoryEntryAdapter(), dotNetInstanceAdapter);
+#endif
         private static readonly AdapterSet dataRowViewAdapter = new AdapterSet(new DataRowViewAdapter(), s_baseAdapterForAdaptedObjects);
         private static readonly AdapterSet dataRowAdapter = new AdapterSet(new DataRowAdapter(), s_baseAdapterForAdaptedObjects);
-#endif
         private static readonly AdapterSet s_xmlNodeAdapter = new AdapterSet(new XmlNodeAdapter(), s_baseAdapterForAdaptedObjects);
 
         #region Adapter Mappings
@@ -418,13 +412,13 @@ namespace System.Management.Automation
             if (obj is PSObject) { return PSObject.s_mshObjectAdapter; }
             if (obj is CimInstance) { return PSObject.s_cimInstanceAdapter; }
 
-#if !CORECLR // WMIv1/ADSI/DataRow/DataRowView Adapters Not Supported On CSS
+#if !CORECLR // WMIv1/ADSI Adapters Not Supported in PowerShell Core
             if (obj is ManagementClass) { return PSObject.managementClassAdapter; }
             if (obj is ManagementBaseObject) { return PSObject.managementObjectAdapter; }
             if (obj is DirectoryEntry) { return PSObject.directoryEntryAdapter; }
+#endif
             if (obj is DataRowView) { return PSObject.dataRowViewAdapter; }
             if (obj is DataRow) { return PSObject.dataRowAdapter; }
-#endif
             if (obj is XmlNode) { return PSObject.s_xmlNodeAdapter; }
             return null;
         }

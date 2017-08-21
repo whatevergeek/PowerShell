@@ -1,9 +1,13 @@
 # Host PowerShell Core in .NET Core Applications
 
-> This documentation is based on PowerShell Core packages built against .NET Core 1.1 and prior. 
-> Things may change after we move to .NET Core 2.0.
+## PowerShell Core v6.0.0-beta.3 and Later
 
-## PowerShell Core targeting .NET Core 1.1 and Prior
+PowerShell Core is refactored in v6.0.0-beta.3 to remove the dependency on a customized `AssemblyLoadContext`.
+With this change, hosting PowerShell Core in .NET Core will be the same as hosting Windows PowerShell in .NET.
+
+Please see the [.NET Core Sample Application](#.net-core-sample-application) section for an example that uses PowerShell Core `beta.3` NuGet packages.
+
+## PowerShell Core v6.0.0-beta.2 and Prior
 
 ### Overview
 
@@ -16,23 +20,23 @@ So applications that want to host PowerShell Core (using PowerShell APIs) need t
 They are for different scenarios:
 
 - `SetPowerShellAssemblyLoadContext` - It's designed to be used by a native host
-whose Trusted Platform Assemblies (TPA) do not include PowerShell assemblies,
-such as the in-box `powershell.exe` and other native CoreCLR host in Nano Server.
-When using this API, instead of setting up a new load context,
-`PowerShellAssemblyLoadContextInitializer` will register a handler to the [Resolving][] event of the default load context.
-Then PowerShell Core will depend on the default load context to handle TPA and the `Resolving` event to handle other assemblies.
+  whose Trusted Platform Assemblies (TPA) do not include PowerShell assemblies,
+  such as the in-box `powershell.exe` and other native CoreCLR host in Nano Server.
+  When using this API, instead of setting up a new load context,
+  `PowerShellAssemblyLoadContextInitializer` will register a handler to the [Resolving][] event of the default load context.
+  Then PowerShell Core will depend on the default load context to handle TPA and the `Resolving` event to handle other assemblies.
 
 - `InitializeAndCallEntryMethod` - It's designed to be used with `dotnet.exe`
-where the TPA list includes PowerShell assemblies.
-When using this API, `PowerShellAssemblyLoadContextInitializer` will set up a new load context to handle all assemblies.
-PowerShell Core itself also uses this API for [bootstrapping][].
+  where the TPA list includes PowerShell assemblies.
+  When using this API, `PowerShellAssemblyLoadContextInitializer` will set up a new load context to handle all assemblies.
+  PowerShell Core itself also uses this API for [bootstrapping][].
 
 This documentation only covers the `InitializeAndCallEntryMethod` API,
 as it's what you need when building a .NET Core application with .NET CLI.
 
 ### Comparison - Hosting Windows PowerShell vs. Hosting PowerShell Core
 
-The following code demonstrates how to host Windows PowerShell in an application.  
+The following code demonstrates how to host Windows PowerShell in an application.
 As shown below, you can insert your business logic code directly in the `Main` method.
 
 ```CSharp
@@ -72,7 +76,7 @@ using System.Reflection;
 
 namespace Application.Test
 {
-    public class Program 
+    public class Program
     {
         /// <summary>
         /// Managed entry point shim, which starts the actual program
@@ -80,10 +84,10 @@ namespace Application.Test
         public static int Main(string[] args)
         {
             // Application needs to use PowerShell AssemblyLoadContext if it needs to create PowerShell runspace
-            // PowerShell engine depends on PS ALC to provide the necessary assembly loading/searching support that is missing from .NET Core 
+            // PowerShell engine depends on PS ALC to provide the necessary assembly loading/searching support that is missing from .NET Core
             string appBase = System.IO.Path.GetDirectoryName(typeof(Program).GetTypeInfo().Assembly.Location);
             System.Console.WriteLine("\nappBase: {0}", appBase);
-            
+
             // Initialize the PS ALC and let it load 'Logic.dll' and start the execution
             return (int)PowerShellAssemblyLoadContextInitializer.
                            InitializeAndCallEntryMethod(
@@ -122,10 +126,21 @@ namespace Application.Test
 }
 ```
 
-### .NET Core Sample Application
+[CorePsAssemblyLoadContext.cs]: https://github.com/PowerShell/PowerShell/blob/v6.0.0-alpha.17/src/Microsoft.PowerShell.CoreCLR.AssemblyLoadContext/CoreCLR/CorePsAssemblyLoadContext.cs
+[Resolving]: https://github.com/dotnet/corefx/blob/ec2a6190efa743ab600317f44d757433e44e859b/src/System.Runtime.Loader/ref/System.Runtime.Loader.cs#L35
+[bootstrapping]: https://github.com/PowerShell/PowerShell/blob/master/src/powershell/Program.cs#L27
 
-You can find the sample application project `"MyApp"` under [sample-dotnet1.1](./sample-dotnet1.1). 
-To build the sample project, run the following commands ([.NET Core SDK 1.0.1](https://github.com/dotnet/cli/releases/tag/v1.0.1) is required):
+## .NET Core Sample Application
+
+- [sample-dotnet1.1](./sample-dotnet1.1) - .NET Core `1.1` + PowerShell Core `alpha.17` NuGet packages.
+  [.NET Core SDK 1.0.1](https://github.com/dotnet/cli/releases/tag/v1.0.1) is required.
+- [sample-dotnet2.0-powershell.beta.1](./sample-dotnet2.0-powershell.beta.1) - .NET Core `2.0.0` + PowerShell Core `beta.1` NuGet packages.
+  .NET Core SDK `2.0.0-preview1-005952` or higher is required.
+- [sample-dotnet2.0-powershell.beta.3](./sample-dotnet2.0-powershell.beta.3) - .NET Core `2.0.0` + PowerShell Core `beta.3` NuGet packages.
+  .NET Core SDK `2.0.0-preview1-005952` or higher is required.
+
+You can find the sample application project `"MyApp"` in each of the above 3 sample folders.
+To build the sample project, run the following commands (make sure the required .NET Core SDK is in use):
 
 ```powershell
 dotnet restore .\MyApp\MyApp.csproj
@@ -134,7 +149,7 @@ dotnet publish .\MyApp -c release -r win10-x64
 
 Then you can run `MyApp.exe` from the publish folder and see the results:
 
-```
+```none
 PS:> .\MyApp.exe
 
 Evaluating 'Get-Command Write-Output' in PS Core Runspace
@@ -147,12 +162,8 @@ System.Management.Automation.ActionPreference
 System.Management.Automation.AliasAttribute
 ```
 
-### Remaining Issue
+## Remaining Issue
 
 PowerShell Core builds separately for Windows and Unix, so the assemblies are different between Windows and Unix platforms.
 Unfortunately, all PowerShell NuGet packages that have been published so far only contain PowerShell assemblies built specifically for Windows.
 The issue [#3417](https://github.com/PowerShell/PowerShell/issues/3417) was opened to track publishing PowerShell NuGet packages for Unix platforms.
-
-[CorePsAssemblyLoadContext.cs]: https://github.com/PowerShell/PowerShell/blob/master/src/Microsoft.PowerShell.CoreCLR.AssemblyLoadContext/CoreCLR/CorePsAssemblyLoadContext.cs
-[Resolving]: https://github.com/dotnet/corefx/blob/ec2a6190efa743ab600317f44d757433e44e859b/src/System.Runtime.Loader/ref/System.Runtime.Loader.cs#L35
-[bootstrapping]: https://github.com/PowerShell/PowerShell/blob/master/src/powershell/Program.cs#L27

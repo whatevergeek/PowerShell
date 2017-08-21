@@ -18,6 +18,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Security.Cryptography;
+using System.Security.Permissions;
 using System.Text;
 using System.Threading;
 using Microsoft.Win32;
@@ -32,8 +33,6 @@ using Microsoft.PowerShell.CoreClr.Stubs;
 #else
 //TODO:CORECLR System.DirectoryServices is not available on CORE CLR
 using System.DirectoryServices;
-//TODO:CORECLR System.Security.Permission is not available on CORE CLR
-using System.Security.Permissions;
 using System.Management; // We are not porting the library to CoreCLR
 using Microsoft.WSMan.Management;
 #endif
@@ -1968,7 +1967,7 @@ $result = @{}
 foreach ($computerName in $array[1])
 {
     $ret = $null
-    if ($array[0] -eq $null)
+    if ($null -eq array[0])
     {
         $ret = Invoke-Command -ComputerName $computerName {$true} -SessionOption (New-PSSessionOption -NoMachineProfile) -ErrorAction SilentlyContinue
     }

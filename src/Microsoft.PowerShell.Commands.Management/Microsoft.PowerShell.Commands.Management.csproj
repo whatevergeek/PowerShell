@@ -1,30 +1,22 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="..\..\PowerShell.Common.props"/>  
+
   <PropertyGroup>
-    <VersionPrefix>6.0.0</VersionPrefix>
-    <TargetFramework>netstandard1.6</TargetFramework>
+    <Description>PowerShell Core's Microsoft.PowerShell.Commands.Management project</Description>
     <NoWarn>$(NoWarn);CS1570</NoWarn>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <DelaySign>true</DelaySign>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <AssemblyName>Microsoft.PowerShell.Commands.Management</AssemblyName>
-    <AssemblyOriginatorKeyFile>../signing/visualstudiopublic.snk</AssemblyOriginatorKeyFile>
-    <SignAssembly>true</SignAssembly>
-    <GenerateAssemblyFileVersionAttribute>false</GenerateAssemblyFileVersionAttribute>
-    <GenerateAssemblyVersionAttribute>false</GenerateAssemblyVersionAttribute>
-    <GenerateNeutralResourcesLanguageAttribute>false</GenerateNeutralResourcesLanguageAttribute>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.csproj" />
   </ItemGroup>
 
-  <PropertyGroup Condition=" '$(TargetFramework)' == 'netstandard1.6' ">
+  <PropertyGroup>
     <DefineConstants>$(DefineConstants);CORECLR</DefineConstants>
   </PropertyGroup>
 
-  <ItemGroup Condition=" '$(TargetFramework)' == 'netstandard1.6' ">
+  <ItemGroup>
     <Compile Remove="commands\management\ClearRecycleBinCommand.cs" />
     <Compile Remove="commands\management\ControlPanelItemCommand.cs" />
     <Compile Remove="commands\management\CommitTransactionCommand.cs" />
@@ -77,10 +69,8 @@
     <DebugType>full</DebugType>
   </PropertyGroup>
 
-  <ItemGroup Condition=" '$(TargetFramework)' == 'netstandard1.6' ">
-    <PackageReference Include="System.ServiceProcess.ServiceController" Version="4.3.0" />
-    <PackageReference Include="System.Net.NameResolution" Version="4.3.0" />
-    <PackageReference Include="System.Net.Ping" Version="4.3.0" />
+  <ItemGroup>
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="4.4.0" />
   </ItemGroup>
 
 </Project>

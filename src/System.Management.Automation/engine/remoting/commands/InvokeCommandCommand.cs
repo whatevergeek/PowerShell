@@ -49,7 +49,7 @@ namespace Microsoft.PowerShell.Commands
     ///
     /// Execute a command in a set of remote machines by specifying the
     /// command and the list of machines
-    ///     $servers = 1..10 | %{"Server${_}"}
+    ///     $servers = 1..10 | ForEach-Object {"Server${_}"}
     ///     invoke-command -command {get-process} -computername $servers
     ///
     /// Create a new runspace and use it to execute a command on a remote machine
@@ -65,7 +65,7 @@ namespace Microsoft.PowerShell.Commands
     /// Create a collection of runspaces and use it to execute a command on a set
     /// of remote machines
     ///
-    ///     $serveruris = 1..8 | %{"http://Server${_}/"}
+    ///     $serveruris = 1..8 | ForEach-Object {"http://Server${_}/"}
     ///     $runspaces = New-PSSession -URI $serveruris
     ///     invoke-command -command {get-process} -Session $runspaces
     ///
@@ -223,6 +223,7 @@ namespace Microsoft.PowerShell.Commands
         /// </remarks>
         [Parameter(ParameterSetName = InvokeCommandCommand.ComputerNameParameterSet)]
         [Parameter(ParameterSetName = InvokeCommandCommand.FilePathComputerNameParameterSet)]
+        [Parameter(ParameterSetName = InvokeCommandCommand.SSHHostParameterSet)]
         [ValidateRange((Int32)1, (Int32)UInt16.MaxValue)]
         public override Int32 Port
         {

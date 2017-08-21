@@ -110,9 +110,3 @@ Describe "Validate basic negative test cases for Variable provider cmdlets" -Tag
         catch { $_.FullyQualifiedErrorId | Should be "NotSupported,Microsoft.PowerShell.Commands.GetItemPropertyValueCommand" }
     }
 }
-
-Describe "Validate special variables" -Tags "CI" {
-    It "Verify `$PSVersionTable.PSEdition" {
-        $PSVersionTable["PSEdition"] | Should Be "Core"
-    }
-}

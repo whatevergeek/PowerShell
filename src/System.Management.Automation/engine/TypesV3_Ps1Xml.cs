@@ -50,10 +50,10 @@ namespace System.Management.Automation.Runspaces
             td2.Members.Add("ConnectedUser",
                 new ScriptPropertyData(@"ConnectedUser", GetScriptBlock(@"$this.UserInfo.Identity.Name"), null));
             td2.Members.Add("RunAsUser",
-                new ScriptPropertyData(@"RunAsUser", GetScriptBlock(@"if($this.UserInfo.WindowsIdentity -ne $null)
-			{
-				$this.UserInfo.WindowsIdentity.Name
-			}"), null));
+                new ScriptPropertyData(@"RunAsUser", GetScriptBlock(@"if($null -ne $this.UserInfo.WindowsIdentity)
+            {
+                $this.UserInfo.WindowsIdentity.Name
+            }"), null));
             yield return td2;
 
             var td3 = new TypeData(@"System.Management.Automation.CompletionResult", true);

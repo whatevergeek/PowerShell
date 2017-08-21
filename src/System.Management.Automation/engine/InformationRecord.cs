@@ -2,14 +2,8 @@
 Copyright (c) Microsoft Corporation.  All rights reserved.
 --********************************************************************/
 
-using Dbg = System.Management.Automation.Diagnostics;
 using System.Runtime.Serialization;
 using System.Collections.Generic;
-using System.Management.Automation.Language;
-
-#if CORECLR
-using Environment = System.Management.Automation.Environment;
-#endif
 
 namespace System.Management.Automation
 {
@@ -46,10 +40,7 @@ namespace System.Management.Automation
             this.ManagedThreadId = (uint)System.Threading.Thread.CurrentThread.ManagedThreadId;
         }
 
-        /// <summary>
-        /// Added to enable ClrFacade.GetUninitializedObject to instantiate an uninitialized version of this class.
-        /// </summary>
-        internal InformationRecord() { }
+        private InformationRecord() { }
 
         /// <summary>
         /// Copy constructor

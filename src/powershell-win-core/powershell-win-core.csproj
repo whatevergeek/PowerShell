@@ -1,16 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="..\..\PowerShell.Common.props"/>  
+
   <PropertyGroup>
     <Description>PowerShell Core on Windows top-level project</Description>
-    <VersionPrefix>6.0.0</VersionPrefix>
-    <TargetFramework>netcoreapp1.1</TargetFramework>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <AssemblyName>powershell</AssemblyName>
     <OutputType>Exe</OutputType>
     <RuntimeIdentifiers>win7-x86;win7-x64;win81-x64;win10-x64</RuntimeIdentifiers>
-    <RuntimeFrameworkVersion>1.1.1</RuntimeFrameworkVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,11 +20,8 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
-    <Content Include="..\..\license_thirdparty_proprietary.txt;..\..\powershell.version">
+    <Content Include="..\..\license_thirdparty_proprietary.txt;..\..\powershell.version;..\..\DELETE_ME_TO_DISABLE_CONSOLEHOST_TELEMETRY">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-    <Content Include="pwrshplugin.dll;pwrshplugin.pdb;Install-PowerShellRemoting.ps1">
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
@@ -37,7 +30,6 @@
     <ProjectReference Include="..\Microsoft.PowerShell.SDK\Microsoft.PowerShell.SDK.csproj" />
     <ProjectReference Include="..\Microsoft.PowerShell.PSReadLine\Microsoft.PowerShell.PSReadLine.csproj" />
     <ProjectReference Include="..\Microsoft.PowerShell.Commands.Diagnostics\Microsoft.PowerShell.Commands.Diagnostics.csproj" />
-    <ProjectReference Include="..\Microsoft.PowerShell.LocalAccounts\Microsoft.PowerShell.LocalAccounts.csproj" />
     <ProjectReference Include="..\Microsoft.Management.Infrastructure.CimCmdlets\Microsoft.Management.Infrastructure.CimCmdlets.csproj" />
     <ProjectReference Include="..\Microsoft.WSMan.Management\Microsoft.WSMan.Management.csproj" />
   </ItemGroup>
@@ -45,9 +37,10 @@
   <ItemGroup>
     <PackageReference Include="PSDesiredStateConfiguration" Version="1.0.0-alpha01" />
     <PackageReference Include="PowerShellHelpFiles" Version="1.0.0-alpha01" />
+    <PackageReference Include="psrp.windows" Version="6.0.0-beta.2" />
   </ItemGroup>
 
-  <PropertyGroup Condition=" '$(TargetFramework)' == 'netcoreapp1.1' ">
+  <PropertyGroup>
     <DefineConstants>$(DefineConstants);CORECLR</DefineConstants>
   </PropertyGroup>
 

@@ -16,12 +16,8 @@ using System.Diagnostics.CodeAnalysis; // for fxcop
 using Dbg = System.Management.Automation.Diagnostics;
 using System.Diagnostics;
 using System.Linq;
+#if LEGACYTELEMETRY
 using Microsoft.PowerShell.Telemetry.Internal;
-
-
-#if CORECLR
-// Use stubs for SerializableAttribute and ISerializable related types
-using Microsoft.PowerShell.CoreClr.Stubs;
 #endif
 
 #pragma warning disable 1634, 1691 // Stops compiler from warning about unknown warnings
@@ -380,7 +376,7 @@ namespace System.Management.Automation.Runspaces
             }
         }
 
-        private static string s_debugPreferenceCachePath = Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsPowerShell"), "DebugPreference.clixml");
+        private static string s_debugPreferenceCachePath = Path.Combine(Path.Combine(Platform.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "WindowsPowerShell"), "DebugPreference.clixml");
         private static object s_debugPreferenceLockObject = new object();
 
         /// <summary>
@@ -743,7 +739,9 @@ namespace System.Management.Automation.Runspaces
                 }
             }
 
+#if LEGACYTELEMETRY
             TelemetryAPI.ReportLocalSessionCreated(InitialSessionState, TranscriptionData);
+#endif
         }
 
         /// <summary>
@@ -869,12 +867,24 @@ namespace System.Management.Automation.Runspaces
                 }
 
                 if ((hostRunspace == null) || (this == hostRunspace))
-                {
+                {                   
+                    // We should close transcripting only if we are closing the last opened runspace.
+                    foreach (Runspace runspace in RunspaceList)
+                    {
+                        // At this stage, the last opened runspace should be at closing state.
+                        if (runspace.RunspaceStateInfo.State == RunspaceState.Opened)
+                        {
+                            return;
+                        }
+                    }
+
                     PSHostUserInterface host = executionContext.EngineHostInterface.UI;
                     if (host != null)
                     {
                         host.StopAllTranscribing();
                     }
+
+                    AmsiUtils.Uninitialize();
                 }
             }
 
@@ -919,10 +929,7 @@ namespace System.Management.Automation.Runspaces
 
             //Log engine lifecycle event.
             MshLog.LogEngineLifecycleEvent(_engine.Context, EngineState.Stopped);
-
-            // Uninitialize the AMSI scan interface
-            AmsiUtils.Uninitialize();
-
+  
             //All pipelines have been canceled. Close the runspace.
             _engine = null;
             _commandFactory = null;
@@ -933,6 +940,8 @@ namespace System.Management.Automation.Runspaces
             RaiseRunspaceStateEvents();
 
             // Report telemetry if we have no more open runspaces.
+
+#if LEGACYTELEMETRY
             bool allRunspacesClosed = true;
             bool hostProvidesExitTelemetry = false;
             foreach (var r in Runspace.RunspaceList)
@@ -953,6 +962,7 @@ namespace System.Management.Automation.Runspaces
             {
                 TelemetryAPI.ReportExitTelemetry(null);
             }
+#endif
         }
 
         /// <summary>
@@ -1266,6 +1276,8 @@ namespace System.Management.Automation.Runspaces
                         RunspaceOpening.Dispose();
                         RunspaceOpening = null;
                     }
+
+                    Platform.RemoveTemporaryDirectory();
 
                     // Dispose the event manager
                     if (this.ExecutionContext != null && this.ExecutionContext.Events != null)

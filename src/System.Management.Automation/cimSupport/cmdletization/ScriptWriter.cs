@@ -22,13 +22,6 @@ using System.Management.Automation.Language;
 using Microsoft.PowerShell.Commands;
 using Dbg = System.Management.Automation.Diagnostics;
 
-#if CORECLR
-// Some APIs are missing from System.Environment. We use System.Management.Automation.Environment as a proxy type:
-//  - for missing APIs, System.Management.Automation.Environment has extension implementation.
-//  - for existing APIs, System.Management.Automation.Environment redirect the call to System.Environment.
-using Environment = System.Management.Automation.Environment;
-#endif
-
 namespace Microsoft.PowerShell.Cmdletization
 {
     [SuppressMessage("Microsoft.Maintainability", "CA1506:AvoidExcessiveClassCoupling")]
@@ -54,8 +47,9 @@ namespace Microsoft.PowerShell.Cmdletization
             ScriptWriter.s_xmlReaderSettings.MaxCharactersFromEntities = 16384; // generous guess for the upper bound
             ScriptWriter.s_xmlReaderSettings.MaxCharactersInDocument = 128 * 1024 * 1024; // generous guess for the upper bound
 
-#if CORECLR // XmlReaderSettings doesn't have XmlResolver and Schema Validation related members in CoreCLR.
-            ScriptWriter.s_xmlReaderSettings.DtdProcessing = DtdProcessing.Ignore; // DtdProcessing.Parse is not in CoreCLR, so we ignore DTDs in OneCore powershell
+#if CORECLR // The XML Schema file 'cmdlets-over-objects.xsd' is missing in Github, and it's likely the resource string
+            //'CmdletizationCoreResources.Xml_cmdletsOverObjectsXsd' needs to be reworked to work in .NET Core.
+            ScriptWriter.s_xmlReaderSettings.DtdProcessing = DtdProcessing.Ignore;
 #else
             ScriptWriter.s_xmlReaderSettings.DtdProcessing = DtdProcessing.Parse; // Allowing DTD parsing with limits of MaxCharactersFromEntities/MaxCharactersInDocument
             ScriptWriter.s_xmlReaderSettings.XmlResolver = null; // do not fetch external documents
@@ -110,13 +104,12 @@ namespace Microsoft.PowerShell.Cmdletization
             }
             catch (InvalidOperationException e)
             {
-#if !CORECLR    // No XmlSchema Validation In CoreCLR
                 XmlSchemaException schemaException = e.InnerException as XmlSchemaException;
                 if (schemaException != null)
                 {
                     throw new XmlException(schemaException.Message, schemaException, schemaException.LineNumber, schemaException.LinePosition);
                 }
-#endif
+
                 XmlException xmlException = e.InnerException as XmlException;
                 if (xmlException != null)
                 {

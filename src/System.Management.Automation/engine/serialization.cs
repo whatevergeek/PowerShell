@@ -14,6 +14,7 @@ using System.Management.Automation.Internal;
 using System.Management.Automation.Language;
 using System.Management.Automation.Runspaces;
 using System.Management.Automation.Tracing;
+using System.Net.Mail;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security;
@@ -24,13 +25,6 @@ using Microsoft.Management.Infrastructure.Serialization;
 using Microsoft.PowerShell.Commands;
 using Dbg = System.Management.Automation.Diagnostics;
 using System.Management.Automation.Remoting;
-
-#if CORECLR
-// Use stubs for SerializableAttribute and ISerializable related types
-using Microsoft.PowerShell.CoreClr.Stubs;
-#else
-using MailAddress = System.Net.Mail.MailAddress;
-#endif
 
 namespace System.Management.Automation
 {
@@ -375,13 +369,13 @@ namespace System.Management.Automation
             _cimClassIdToClass.Add(key, cimClass);
 
             /* PRINTF DEBUG
-			Console.WriteLine("Contents of deserialization cache (after  a call to AddCimClassToCache ({0})):", key);
-			Console.WriteLine("  Count = {0}", this._cimClassIdToClass.Count);
-			foreach (var t in this._cimClassIdToClass.Keys)
-			{
-				Console.WriteLine("  {0}", t);
-			}
-			 */
+            Console.WriteLine("Contents of deserialization cache (after  a call to AddCimClassToCache ({0})):", key);
+            Console.WriteLine("  Count = {0}", this._cimClassIdToClass.Count);
+            foreach (var t in this._cimClassIdToClass.Keys)
+            {
+                Console.WriteLine("  {0}", t);
+            }
+             */
         }
 
         internal CimClass GetCimClassFromCache(TKey key)
@@ -390,15 +384,15 @@ namespace System.Management.Automation
             if (_cimClassIdToClass.TryGetValue(key, out cimClass))
             {
                 /* PRINTF DEBUG
-				Console.WriteLine("GetCimClassFromCache - class found: {0}", key);
-				 */
+                Console.WriteLine("GetCimClassFromCache - class found: {0}", key);
+                 */
 
                 return cimClass;
             }
 
             /* PRINTF DEBUG
-			Console.WriteLine("GetCimClassFromCache - class NOT found: {0}", key);
-			 */
+            Console.WriteLine("GetCimClassFromCache - class NOT found: {0}", key);
+             */
 
             return null;
         }
@@ -424,13 +418,13 @@ namespace System.Management.Automation
             _cimClassesHeldByDeserializer.Add(key);
 
             /* PRINTF DEBUG
-			Console.WriteLine("Contents of serialization cache (after adding {0}):", key);
-			Console.WriteLine("  Count = {0}", this._cimClassesHeldByDeserializer.Count);
-			foreach (var t in _cimClassesHeldByDeserializer)
-			{
-				Console.WriteLine("  {0}", t);
-			}
-			 */
+            Console.WriteLine("Contents of serialization cache (after adding {0}):", key);
+            Console.WriteLine("  Count = {0}", this._cimClassesHeldByDeserializer.Count);
+            foreach (var t in _cimClassesHeldByDeserializer)
+            {
+                Console.WriteLine("  {0}", t);
+            }
+             */
         }
     }
 
@@ -2985,6 +2979,35 @@ namespace System.Management.Automation
 
         #endregion constructor
 
+        #region Known CIMTypes
+
+        private static Lazy<HashSet<Type>> s_knownCimArrayTypes = new Lazy<HashSet<Type>>(
+            () =>
+                new HashSet<Type>
+                {
+                    typeof(Boolean),
+                    typeof(byte),
+                    typeof(char),
+                    typeof(DateTime),
+                    typeof(Decimal),
+                    typeof(Double),
+                    typeof(Int16),
+                    typeof(Int32),
+                    typeof(Int64),
+                    typeof(SByte),
+                    typeof(Single),
+                    typeof(String),
+                    typeof(TimeSpan),
+                    typeof(UInt16),
+                    typeof(UInt32),
+                    typeof(UInt64),
+                    typeof(object),
+                    typeof(CimInstance)
+                }
+            );
+
+        #endregion
+
         #region deserialization
         /// <summary>
         /// Used by Remoting infrastructure. This TypeTable instance
@@ -3192,7 +3215,7 @@ namespace System.Management.Automation
                     {
                         return false;
                     }
-                    if (!originalArrayType.IsArray)
+                    if (!originalArrayType.IsArray || !s_knownCimArrayTypes.Value.Contains(originalArrayType.GetElementType()))
                     {
                         return false;
                     }
@@ -4032,15 +4055,11 @@ namespace System.Management.Automation
             xrs.IgnoreProcessingInstructions = true;
             xrs.IgnoreWhitespace = false;
             xrs.MaxCharactersFromEntities = 1024;
-            //xrs.DtdProcessing = DtdProcessing.Prohibit; //because system.management.automation needs to build as 2.0
-            //xrs.ProhibitDtd = true;
-#if !CORECLR
-            // XmlReaderSettings.Schemas/ValidationFlags/ValidationType/XmlResolver Not In CoreCLR
+            xrs.XmlResolver = null;
+            xrs.DtdProcessing = DtdProcessing.Prohibit;
             xrs.Schemas = null;
             xrs.ValidationFlags = System.Xml.Schema.XmlSchemaValidationFlags.None;
             xrs.ValidationType = ValidationType.None;
-            xrs.XmlResolver = null;
-#endif
             return xrs;
         }
 
@@ -4057,15 +4076,10 @@ namespace System.Management.Automation
             settings.IgnoreWhitespace = true;
             settings.MaxCharactersFromEntities = 1024;
             settings.MaxCharactersInDocument = 512 * 1024 * 1024; // 512M characters = 1GB
-
-#if CORECLR // DtdProcessing.Parse Not In CoreCLR
-            settings.DtdProcessing = DtdProcessing.Ignore;
-#else       // XmlReaderSettings.ValidationFlags/ValidationType/XmlResolver Not In CoreCLR
+            settings.XmlResolver = null;
             settings.DtdProcessing = DtdProcessing.Parse;   // Allowing DTD parsing with limits of MaxCharactersFromEntities/MaxCharactersInDocument
             settings.ValidationFlags = System.Xml.Schema.XmlSchemaValidationFlags.None;
             settings.ValidationType = ValidationType.None;
-            settings.XmlResolver = null;
-#endif
             return settings;
         }
 
@@ -5874,8 +5888,8 @@ namespace System.Management.Automation
                 typeof(Int64),
                 typeof(SByte),
                 typeof(Single),
-				// typeof(ScriptBlock) - don't want ScriptBlocks, because they are deserialized into strings
-				typeof(String),
+                // typeof(ScriptBlock) - don't want ScriptBlocks, because they are deserialized into strings
+                typeof(String),
                 typeof(TimeSpan),
                 typeof(UInt16),
                 typeof(UInt32),
@@ -7121,9 +7135,7 @@ namespace Microsoft.PowerShell
 
             PSSenderInfo senderInfo = new PSSenderInfo(psPrincipal, GetPropertyValue<string>(pso, "ConnectionString"));
 
-#if !CORECLR // TimeZone Not In CoreCLR
-            senderInfo.ClientTimeZone = TimeZone.CurrentTimeZone;
-#endif
+            senderInfo.ClientTimeZone = TimeZoneInfo.Local;
             senderInfo.ApplicationArguments = GetPropertyValue<PSPrimitiveDictionary>(pso, "ApplicationArguments");
 
             return senderInfo;

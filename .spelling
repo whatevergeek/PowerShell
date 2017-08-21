@@ -112,6 +112,55 @@ Win32
 WinRM
 WSMan
 xUnit
+2ae5d07
+codecov.io
+microsoft.powershell.commands.diagnostics
+microsoft.powershell.commands.management
+microsoft.powershell.commands.utility
+microsoft.powershell.consolehost
+microsoft.powershell.coreclr.assemblyloadcontext
+microsoft.powershell.coreclr.eventing
+microsoft.powershell.psreadline
+microsoft.powershell.security
+microsoft.wsman.management
+system.management.automation
+microsoft.wsman.runtime
+wsmansessionoption.cs
+program.cs
+convertto-xml
+psobjects
+argumentlist
+comobject
+debughandler
+namedpipe
+acl
+authenticodesignature
+utils.cs
+credssp
+ifdef'ed
+cimsupport
+cimsession
+isnot
+notcontains
+snapin
+sessionstateitem
+sessionstatecontainer
+childitem
+showcommandinfo
+psproxyjobs
+throttlelimit
+helpsystem
+savehelp
+helpproviderwithcache
+helpproviderwithfullcache
+utils
+registryprovider
+functionprovider
+aditya
+patwardhan
+adityapatwardhan
+ilya
+sazonov
  - demos/Azure/README.md
 AzureRM.NetCore.Preview
 AzureRM.Profile.NetCore.Preview
@@ -165,8 +214,16 @@ journalctl
 SystemD
  - docker/README.md
 andschwa's
+CurrentUser
+hub.docker.com
+microsoft
+NanoServer-Insider
+nanoserver-insider-powershell
  - docs/building/internals.md
 Catalog
+src
+powershell-unix
+MSBuild
  - docs/building/macos.md
 preview3
  - docs/community/governance.md
@@ -218,11 +275,6 @@ cd
 cdxml
 int
 p1
- - docs/dev-process/map-json-files.md
-build.psm1
-psl-monad
-sd
-System.Management.Automation.dll
  - docs/FAQ.md
 PoshCode
 SS64.com
@@ -293,11 +345,17 @@ vors
  - docs/maintainers/releasing.md
 2012r2
 CHANGELOG.md
+Dockerfiles
+downlevel
+Effing
+PowerShellCore
+Ronn
 Toolset
 v6
 WiX
  - docs/testing-guidelines/PowerShellCoreTestStatus.md
 Add-LocalGroupMember
+add-on
 adhoc
 Clear-ItemProperty
 Connect-PSSession
@@ -454,6 +512,7 @@ Update-TypeData
  - docs/testing-guidelines/testing-guidelines.md
 100ms
 Api
+build.psm1
 DotNet
 Interop
 MessageAnalyzer
@@ -494,8 +553,10 @@ throw-testcasesItMockDescribe
 Gitter
 microsoft.com
 msi
+omnisharp-vscode
 opencode
 pkg
+UserVoice
  - src/libpsl-native/README.md
 Ansi
 C#'s
@@ -741,7 +802,12 @@ csharp
 fullclr
 shebang
  - CHANGELOG.md
+_
+_Jobs
+-Exclude
+-Include
 -Title
+0xfeeddeadbeef
 alpha.10
 alpha.11
 alpha.12
@@ -749,15 +815,25 @@ alpha.13
 alpha.14
 alpha.16
 alpha.17
+alpha.18
+behavioral
+beta.1
+beta.2
+beta.3
+beta.4
 bool
 ContentType
 ConvertTo-Html
 CoreConsoleHost
 crossgen'ing
+deserialize
 EXE's
+ExecutionPolicy
 FileCatalog
 FilterHashtable
 GetParentProcess
+globbing
+honors
 hostname
 IncludeUserName
 InformationRecord
@@ -770,8 +846,12 @@ kittholland
 kwiknick
 Lee303
 libpsl-native
+MiaRomero
 Microsoft.Management.Infrastructure.Native
 Microsoft.PowerShell.LocalAccounts
+mklement0
+non-22
+oising
 oneget.org
 PetSerAl
 powercode
@@ -782,13 +862,22 @@ PseudoParameterBinder
 PSReadLine
 PVS-Studio
 rc2-24027
-rc3-24011 
+rc3-24011
+RelationLink
+rkeithhill
+shebang
+startup
 stdin
 StringBuilder
 system.manage
+Tadas
+TheFlyingCorpse
+TimCurwick
+timestamp
 TimeZone
 TTY's
 UserData
+UTF8NoBOM
 v0.1.0
 v0.2.0
 v0.3.0
@@ -801,6 +890,23 @@ WebRequest
 win7-x86
 WindowsVersion
 XPath
+alpha.18
+behavioral
+MiaRomero
+TheFlyingCorpse
+Youtube
+beta.5
+non-R2
+mwrock
+deserialization
+non-CIM
+DarwinJS
+bergmeister
+cleanup
+KirkMunro
+dchristian3188
+jeffbi
+PSScriptAnalyzer
  - test/tools/CodeCoverageAutomation/README.md
 CodeCoverage.zip
 Coveralls.exe
@@ -816,3 +922,15 @@ v6.0.
  - docs/host-powershell/README.md
 CorePsAssemblyLoadContext.cs
 sample-dotnet1
+NTLM-based
+Kerberos-based
+preview1-002106-00
+sample-dotnet2
+0-powershell
+post-6
+- CODE_OF_CONDUCT.md
+opencode
+microsoft.com
+ - ./tools/install-powershell.readme.md
+includeide
+sed
