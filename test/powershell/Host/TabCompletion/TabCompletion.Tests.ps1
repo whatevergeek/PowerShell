@@ -73,28 +73,28 @@ Describe "TabCompletion" -Tags CI {
         $completionText -join ' ' | Should Be 'Expression FormatString'
     }
 
-    It 'Should complete format-custom  hashtable' {
+    It 'Should complete format-custom hashtable' {
         $res = TabExpansion2 -inputScript 'Get-ChildItem | Format-Custom @{ ' -cursorColumn 'Get-ChildItem | Format-Custom @{ '.Length
         $res.CompletionMatches.Count | Should Be 2
         $completionText = $res.CompletionMatches.CompletionText | Sort-Object
         $completionText -join ' ' | Should Be 'Depth Expression'
     }
 
-    It 'Should complete Select-Object  hashtable' {
+    It 'Should complete Select-Object hashtable' {
         $res = TabExpansion2 -inputScript 'Get-ChildItem | Select-Object @{ ' -cursorColumn 'Get-ChildItem | Select-Object @{ '.Length
         $res.CompletionMatches.Count | Should Be 2
         $completionText = $res.CompletionMatches.CompletionText | Sort-Object
         $completionText -join ' '| Should Be 'Expression Name'
     }
 
-    It 'Should complete Sort-Object  hashtable' {
+    It 'Should complete Sort-Object hashtable' {
         $res = TabExpansion2 -inputScript 'Get-ChildItem | Sort-Object @{ ' -cursorColumn 'Get-ChildItem | Sort-Object @{ '.Length
         $res.CompletionMatches.Count | Should Be 3
         $completionText = $res.CompletionMatches.CompletionText | Sort-Object
         $completionText -join ' '| Should Be 'Ascending Descending Expression'
     }
 
-    It 'Should complete New-Object  hashtable' {
+    It 'Should complete New-Object hashtable' {
         class X {
             $A
             $B
@@ -933,6 +933,21 @@ dir -Recurse `
             $res = TabExpansion2 -inputScript $inputStr -cursorColumn $inputStr.Length
             $res.CompletionMatches.Count | Should BeGreaterThan 0
             $res.CompletionMatches[0].CompletionText | Should Be $expected
+        }
+    }
+
+    Context "Module cmdlet completion tests" {
+        It "ArugmentCompleter for PSEdition should work for '<cmd>'" -TestCases @(
+            @{cmd = "Get-Module -PSEdition "; expected = "Desktop", "Core"}
+        ) {
+            param($cmd, $expected)
+            $res = TabExpansion2 -inputScript $cmd -cursorColumn $cmd.Length
+            $res.CompletionMatches.Count | Should Be $expected.Count
+            $completionOptions = ""
+            foreach ($completion in $res.CompletionMatches) {
+                $completionOptions += $completion.ListItemText
+            }
+            $completionOptions | Should Be ([string]::Join("", $expected))
         }
     }
 }

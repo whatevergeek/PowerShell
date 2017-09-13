@@ -35,7 +35,7 @@ This is to help track the release preparation work.
      Delete the `docker` branch once the builds succeed.
    - Windows: queue a new build in `PowerShell Windows Docker Build` on VSTS.
 1. Verify the generated docker container images.
-1. [Update the homebrew formula](#homebrew) for the OSX package.
+1. [Update the homebrew formula](#homebrew) for the macOS package.
    This task usually will be taken care of by the community,
    so we can wait for one day or two and see if the homebrew formula has already been updated,
    and only do the update if it hasn't.
@@ -43,7 +43,7 @@ This is to help track the release preparation work.
 ## Building Packages
 
 > Note: Linux and Windows packages are taken care of by our release build pipeline in VSTS,
-while the OSX package needs to be built separately on a macOS.
+while the macOS package needs to be built separately on a macOS.
 
 The release build should be started based on the `release` branch.
 The release Git tag won't be created until all release preparation tasks are done,
@@ -160,20 +160,15 @@ On Windows, the `-Runtime` parameter should be specified for `Start-PSBuild` to 
 # Install dependencies
 Start-PSBootstrap -Package
 
-# Build for v6.0.0-beta.1 release targeting Windows 10 and Server 2016
-Start-PSBuild -Clean -CrossGen -PSModuleRestore -Runtime win10-x64 -Configuration Release -ReleaseTag v6.0.0-beta.1
+# Build for v6.0.0-beta.1 release targeting Windows universal package, set -Runtime to win7-x64
+Start-PSBuild -Clean -CrossGen -PSModuleRestore -Runtime win7-x64 -Configuration Release -ReleaseTag v6.0.0-beta.1
 ```
 
-If the package is targeting a downlevel Windows (not Windows 10 or Server 2016),
-the `-WindowsDownLevel` parameter should be specified for `Start-PSPackage`.
-Otherwise, the `-WindowsDownLevel` parameter should be left out.
-
 ```powershell
-# Create packages for v6.0.0-beta.1 release targeting Windows 10 and Server 2016.
-# When creating packages for downlevel Windows, such as Windows 8.1 or Server 2012R2,
-# the parameter '-WindowsDownLevel' must be specified.
-Start-PSPackage -Type msi -ReleaseTag v6.0.0-beta.1 <# -WindowsDownLevel win81-x64 #>
-Start-PSPackage -Type zip -ReleaseTag v6.0.0-beta.1 <# -WindowsDownLevel win81-x64 #>
+# Create packages for v6.0.0-beta.1 release targeting Windows universal package.
+# 'win7-x64' / 'win7-x86' should be used for -WindowsRuntime.
+Start-PSPackage -Type msi -ReleaseTag v6.0.0-beta.1 -WindowsRuntime 'win7-x64'
+Start-PSPackage -Type zip -ReleaseTag v6.0.0-beta.1 -WindowsRuntime 'win7-x64'
 ```
 
 ## NuGet Packages
